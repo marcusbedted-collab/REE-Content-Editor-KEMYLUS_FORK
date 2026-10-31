@@ -10,12 +10,15 @@ using ContentEditor.Core;
 using Hexa.NET.ImNodes;
 using ReeLib;
 using ReeLib.Common;
+using ReeLib.via;
+using System.Text;
 
 namespace ContentEditor.App;
 
 public static class AppImguiHelpers
 {
     private static readonly ConcurrentDictionary<uint, string> fileBrowseResults = new();
+    private static readonly ConcurrentDictionary<string, byte> invisibleButtonClampWarnings = new();
 
     public unsafe static void Image(uint handle, Vector2 size)
     {
@@ -28,6 +31,20 @@ public static class AppImguiHelpers
     }
 
     public unsafe static ImTextureRef AsTextureRef(this Texture texture) => new ImTextureRef(null, new ImTextureID(texture.Handle));
+
+    public static bool InvisibleButtonSafe(string id, Vector2 size, ImGuiButtonFlags flags = ImGuiButtonFlags.None)
+    {
+        var minSize = MathF.Max(1f, UI.UIScale);
+        var invalidX = !float.IsFinite(size.X) || size.X <= 0f;
+        var invalidY = !float.IsFinite(size.Y) || size.Y <= 0f;
+        var safeSize = new Vector2(
+            invalidX ? minSize : size.X,
+            invalidY ? minSize : size.Y);
+        if ((invalidX || invalidY) && invisibleButtonClampWarnings.TryAdd(id, 0)) {
+            Logger.Warn($"InvisibleButtonSafe clamped invalid size for '{id}' from ({size.X:0.###}, {size.Y:0.###}) to ({safeSize.X:0.###}, {safeSize.Y:0.###}).");
+        }
+        return ImGui.InvisibleButton(id, safeSize, flags);
+    }
 
     public static bool InputFilepath(ReadOnlySpan<byte> label, [NotNull] ref string? path, FileFilter[]? extensions = null, bool allowOverlap = false)
     {
@@ -70,6 +87,103 @@ public static class AppImguiHelpers
     {
         ImGui.GetWindowDrawList().AddLine(ImGui.GetCursorScreenPos(), ImGui.GetCursorScreenPos() + new Vector2(AppImguiHelpers.NodeContentAvailX(nodeId), 0), ImguiHelpers.GetColorU32(ImGuiCol.Separator));
         ImGui.Spacing();
+    }
+
+    public static void BeginWorkbenchChild(string id, Vector2 size, ImGuiChildFlags flags = ImGuiChildFlags.None)
+    {
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(8f, 6f) * UI.UIScale);
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(6f, 4f) * UI.UIScale);
+        ImGui.BeginChild(id, size, ImGuiChildFlags.AlwaysUseWindowPadding | flags);
+    }
+
+    public static void EndWorkbenchChild()
+    {
+        ImGui.EndChild();
+        ImGui.PopStyleVar(2);
+    }
+
+    public static void DrawWorkbenchPanelHeader(string title, string subtitle, Vector4? accentColor = null)
+    {
+        var draw = ImGui.GetWindowDrawList();
+        var pos = ImGui.GetCursorScreenPos();
+        var width = MathF.Max(1f, ImGui.GetContentRegionAvail().X);
+        var height = 40f * UI.UIScale;
+        var accent = ImGui.GetColorU32(accentColor ?? new Vector4(0.95f, 0.55f, 0.12f, 1f));
+        var bg = ImGui.GetColorU32(new Vector4(0.13f, 0.13f, 0.13f, 1f));
+        var bg2 = ImGui.GetColorU32(new Vector4(0.19f, 0.19f, 0.19f, 1f));
+
+        draw.AddRectFilled(pos, pos + new Vector2(width, height), bg, 4f * UI.UIScale);
+        draw.AddRectFilled(pos, pos + new Vector2(4f * UI.UIScale, height), accent, 4f * UI.UIScale);
+        draw.AddRectFilled(pos + new Vector2(width - 5f * UI.UIScale, 0), pos + new Vector2(width, height), accent, 4f * UI.UIScale);
+        draw.AddLine(pos + new Vector2(0, height - 1f), pos + new Vector2(width, height - 1f), bg2, 1.5f * UI.UIScale);
+
+        ImGui.SetCursorScreenPos(pos + new Vector2(12f, 6f) * UI.UIScale);
+        ImGui.TextUnformatted(title);
+        ImGui.SetCursorScreenPos(pos + new Vector2(12f, 24f) * UI.UIScale);
+        ImGui.TextDisabled(subtitle);
+        ImGui.SetCursorScreenPos(pos + new Vector2(0, height + 7f * UI.UIScale));
+        ImGui.Dummy(Vector2.Zero);
+    }
+
+    public static string FormatRszClassName(string? className)
+    {
+        if (string.IsNullOrWhiteSpace(className)) {
+            return "(none)";
+        }
+
+        var shortName = className;
+        var lastDot = shortName.LastIndexOf('.');
+        if (lastDot >= 0 && lastDot + 1 < shortName.Length) {
+            shortName = shortName[(lastDot + 1)..];
+        }
+
+        foreach (var prefix in new[] { "Condition", "Action", "Selector" }) {
+            if (shortName.StartsWith(prefix, StringComparison.Ordinal) && shortName.Length > prefix.Length) {
+                shortName = shortName[prefix.Length..];
+                break;
+            }
+        }
+
+        return HumanizeIdentifier(shortName);
+    }
+
+    public static string FormatRszInstanceTitle(RszInstance? instance)
+    {
+        return instance == null || instance == RszInstance.NULL
+            ? "(none)"
+            : FormatRszClassName(instance.RszClass.name);
+    }
+
+    public static string HumanizeIdentifier(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) {
+            return "(none)";
+        }
+
+        var text = value.Trim('_', ' ');
+        var sb = new StringBuilder(text.Length + 8);
+        for (var i = 0; i < text.Length; i++) {
+            var ch = text[i];
+            if (ch is '_' or '-') {
+                if (sb.Length > 0 && sb[^1] != ' ') sb.Append(' ');
+                continue;
+            }
+
+            var prev = i > 0 ? text[i - 1] : '\0';
+            var next = i + 1 < text.Length ? text[i + 1] : '\0';
+            var addSpace = i > 0
+                && sb.Length > 0
+                && sb[^1] != ' '
+                && char.IsUpper(ch)
+                && (char.IsLower(prev) || char.IsDigit(prev) || (char.IsUpper(prev) && char.IsLower(next)));
+            if (addSpace) {
+                sb.Append(' ');
+            }
+
+            sb.Append(ch);
+        }
+
+        return sb.Length == 0 ? "(none)" : sb.ToString();
     }
 
     public static void PrependIcon(object target)
@@ -487,6 +601,6 @@ public static class AppImguiHelpers
 
     public static string FormatHotkeyString(KeyBinding hotkey)
     {
-        return (hotkey.ctrl ? "Ctrl + " : "") + (hotkey.shift ? "Shift + " : "") + (hotkey.alt ? "Alt + " : "") + hotkey.Key + (hotkey.wasd ? " + W/A/S/D" : "");
+        return (hotkey.ctrl ? "Ctrl + " : "") + (hotkey.shift ? "Shift + " : "") + (hotkey.alt ? "Alt + " : "") + hotkey.Key;
     }
 }

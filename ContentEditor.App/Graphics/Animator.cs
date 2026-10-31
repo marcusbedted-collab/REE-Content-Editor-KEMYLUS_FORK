@@ -16,6 +16,10 @@ public partial class Animator(ContentWorkspace Workspace)
     private float clipFramerate;
     private float clipDuration;
 
+    public readonly record struct PlaybackState(Animator Source, FileHandle? File, MotFile ActiveMotion, string MotionName, int CurrentFrame, float CurrentTime, float FrameRate, bool IsPlaying, bool IsActive);
+
+    public static PlaybackState? LastPlaybackState { get; private set; }
+
     private AnimatedMeshHandle? mesh;
     public AnimatedMeshHandle? Mesh => mesh;
 
@@ -49,6 +53,12 @@ public partial class Animator(ContentWorkspace Workspace)
     [GeneratedRegex("(?:^|_)(\\d{4})(?:$|_)")]
     private static partial Regex MotIdRegex();
 
+    private void PublishPlaybackState()
+    {
+        if (ActiveMotion == null) return;
+        LastPlaybackState = new PlaybackState(this, animationFile, ActiveMotion, ActiveMotion.Name, CurrentFrame, CurrentTime, FrameRate, IsPlaying, IsActive);
+    }
+
     public static string? GetMotionId(string name)
     {
         var match = Animator.MotIdRegex().Match(name);
@@ -62,11 +72,13 @@ public partial class Animator(ContentWorkspace Workspace)
     public void Play()
     {
         IsPlaying = true;
+        PublishPlaybackState();
     }
 
     public void Pause()
     {
         IsPlaying = false;
+        PublishPlaybackState();
     }
 
     public void Stop()
@@ -74,12 +86,14 @@ public partial class Animator(ContentWorkspace Workspace)
         IsPlaying = false;
         currentTime = 0;
         RevertMeshPose();
+        PublishPlaybackState();
     }
 
     public void Restart()
     {
         currentTime = 0;
         Update(0);
+        PublishPlaybackState();
     }
 
     public void SetSkeleton(FbxSkelFile? skeleton)
@@ -87,9 +101,12 @@ public partial class Animator(ContentWorkspace Workspace)
         this.skeleton = skeleton;
     }
 
+    public int GetMotionFileIndex(MotFileBase motion) => motionIndices?.GetValueOrDefault(motion) ?? -1;
+
     public void Seek(float time)
     {
         currentTime = Math.Clamp(time, 0, clipDuration);
+        PublishPlaybackState();
     }
 
     public void SeekPercentage(float time)
@@ -139,9 +156,8 @@ public partial class Animator(ContentWorkspace Workspace)
         clipDuration = ActiveMotion.Header.frameCount / clipFramerate;
         currentTime = 0;
         Update(0);
+        PublishPlaybackState();
     }
-
-    public int GetMotionFileIndex(MotFileBase b) => motionIndices?.GetValueOrDefault(b) ?? -1;
 
     public void Unload()
     {
@@ -300,6 +316,8 @@ public partial class Animator(ContentWorkspace Workspace)
                 }
             }
         }
+
+        PublishPlaybackState();
     }
 
     private void RevertMeshPose()

@@ -45,6 +45,7 @@ public class MotlistEditor : FileEditor, IWorkspaceContainer, IObjectUIHandler
 {
     public ContentWorkspace Workspace { get; }
     public MotlistFile File => Handle.GetFile<MotlistFile>();
+    private readonly MotlistTimelineEditor timelineEditor;
 
     public override string HandlerName => "Motlist";
 
@@ -88,12 +89,20 @@ public class MotlistEditor : FileEditor, IWorkspaceContainer, IObjectUIHandler
     public MotlistEditor(ContentWorkspace env, FileHandle file) : base(file)
     {
         Workspace = env;
+        timelineEditor = new MotlistTimelineEditor(this);
     }
 
     protected override void OnFileReverted()
     {
         base.OnFileReverted();
         context.ClearChildren();
+        timelineEditor.Reset();
+    }
+
+    public void OnClosed()
+    {
+        timelineEditor.CloseTimelineWindow();
+        timelineEditor.CloseInspectorWindow();
     }
 
     protected override void DrawFileControls(WindowData data)
@@ -131,7 +140,7 @@ public class MotlistEditor : FileEditor, IWorkspaceContainer, IObjectUIHandler
             context.AddChild<MotlistFile, List<MotFileBase>>("Motion Files", File, getter: (m) => m!.MotFiles).AddDefaultHandler<List<MotFileBase>>();
             context.AddChild<MotlistFile, List<MotIndex>>("Motions", File, getter: (m) => m!.Motions).AddDefaultHandler<List<MotIndex>>();
         }
-        context.ShowChildrenUI();
+        timelineEditor.Draw(context.ShowChildrenUI);
     }
 
     void IObjectUIHandler.OnIMGUI(UIContext context)
@@ -142,6 +151,11 @@ public class MotlistEditor : FileEditor, IWorkspaceContainer, IObjectUIHandler
     internal void RefreshUI()
     {
         context.GetChildByValue<List<MotFileBase>>()?.ClearChildren();
+    }
+
+    internal void MarkTimelineModified()
+    {
+        Handle.EmitChange();
     }
 }
 
