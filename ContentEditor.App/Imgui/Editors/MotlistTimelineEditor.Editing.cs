@@ -1,319 +1,484 @@
-using ContentEditor.Core;
+using System.Numerics;
+using System.Globalization;
+using Hexa.NET.ImGui;
+using Hexa.NET.ImPlot;
+using Hexa.NET.ImGui.Widgets;
+using ReeLib;
 using ReeLib.Clip;
+using ReeLib.Mot;
+using ReeLib.Common;
+using ContentEditor.App.Graphics;
 
 namespace ContentEditor.App.ImguiHandling;
 
-internal sealed partial class MotlistTimelineEditor
+public partial class MotlistTimelineEditor
 {
-    private void BeginRangeDrag(ClipTrack track, RangeGroup range, int minimumFrame, int maximumFrame, float pixelsOnCanvas, float timelineX)
+    private void DrawTimelineContextMenu()
     {
-        var mouseX = ImGui.GetMousePos().X;
-        var startX = timelineX + (range.Start - minimumFrame) * pixelsOnCanvas;
-        var endX = MathF.Max(startX + MinimumClipWidth * UI.UIScale, timelineX + (range.End - minimumFrame) * pixelsOnCanvas);
-        var handle = MathF.Min(HandleWidth * UI.UIScale, (endX - startX) * 0.5f);
-        var mode = mouseX <= MathF.Min(startX, endX) + handle
-            ? DragMode.ResizeStart
-            : mouseX >= MathF.Max(startX, endX) - handle ? DragMode.ResizeEnd : DragMode.MoveRange;
-
-        var bounds = GetTrackBounds(track, minimumFrame, maximumFrame);
-        selectedProperty = selectedProperty != null && range.Properties.Contains(selectedProperty) ? selectedProperty : range.Properties[0];
-        selectedKey = null;
-        drag = new DragState {
-            Mode = mode,
-            MouseStartX = mouseX,
-            PixelsPerFrame = MathF.Max(0.01f, pixelsOnCanvas),
-            MinimumFrame = bounds.Minimum,
-            MaximumFrame = bounds.Maximum,
-            RangeStart = range.Start,
-            RangeEnd = range.End,
-            Properties = CaptureProperties(range.Properties),
-        };
-    }
-
-    private void BeginKeyDrag(ClipTrack track, KeyGroup group, int minimumFrame, int maximumFrame, float pixelsOnCanvas, bool moveStack)
-    {
-        var selected = group.Keys.FirstOrDefault(item => ReferenceEquals(item.Key, selectedKey));
-        if (selected.Key == null) selected = group.Keys[0];
-        selectedProperty = selected.Property;
-        selectedKey = selected.Key;
-
-        var keys = moveStack ? group.Keys : [selected];
-        if (keys.Any(item => !float.IsFinite(item.Key.frame))) return;
-        var trackBounds = GetTrackBounds(track, minimumFrame, maximumFrame);
-        // Clamp a shared delta, not each absolute frame, so stack spacing is preserved.
-        var minimum = keys.Max(item => MathF.Max(trackBounds.Minimum, item.Property.Info.startFrame) - item.Key.frame);
-        var maximum = keys.Min(item => MathF.Min(trackBounds.Maximum, item.Property.Info.endFrame) - item.Key.frame);
-
-        drag = new DragState {
-            Mode = DragMode.MoveKeys,
-            MouseStartX = ImGui.GetMousePos().X,
-            PixelsPerFrame = MathF.Max(0.01f, pixelsOnCanvas),
-            MinimumFrame = minimum,
-            MaximumFrame = maximum,
-            Keys = keys.DistinctBy(item => item.Key).Select(item => (item.Property, item.Key, item.Key.frame)).ToList(),
-        };
-    }
-
-    private void BeginTrackEdgeDrag(ClipTrack track, int minimumFrame, int maximumFrame, float pixelsOnCanvas, bool startEdge, bool moveBoundaryKeys)
-    {
-        if (!TryGetEditableTrackBounds(track, minimumFrame, maximumFrame, out var bounds)) return;
-
-        var boundary = startEdge ? bounds.Minimum : bounds.Maximum;
-        var boundaryProperties = EnumerateTimelineProperties(track.Properties)
-            .Where(property => IsValidRange(property)
-                && MathF.Abs((startEdge ? property.Info.startFrame : property.Info.endFrame) - boundary) < 0.001f)
-            .Select(property => new PropertySnapshot(
-                property,
-                property.Info.startFrame,
-                property.Info.endFrame,
-                property.Keys?.Select(key => (key, key.frame)).ToList() ?? []))
-            .ToList();
-        var boundaryKeys = moveBoundaryKeys
-            ? EnumerateKeys(track.Properties)
-                .Where(item => float.IsFinite(item.Key.frame) && MathF.Abs(item.Key.frame - boundary) < 0.001f)
-                .Select(item => (item.Key, item.Key.frame))
-                .DistinctBy(item => item.Key)
-                .ToList()
-            : [];
-
-        drag = new DragState {
-            Mode = startEdge ? DragMode.ResizeTrackStart : DragMode.ResizeTrackEnd,
-            MouseStartX = ImGui.GetMousePos().X,
-            PixelsPerFrame = MathF.Max(0.01f, pixelsOnCanvas),
-            MinimumFrame = bounds.Minimum,
-            MaximumFrame = bounds.Maximum,
-            Track = new TrackSnapshot(track, bounds.Minimum, bounds.Maximum, boundaryProperties, boundaryKeys),
-            MoveBoundaryKeys = moveBoundaryKeys,
-        };
-    }
-
-    private void UpdateDrag()
-    {
-        if (drag == null) return;
-        if (!ImGui.IsMouseDown(ImGuiMouseButton.Left)) {
-            FinishDrag(drag);
-            drag = null;
+        if (!ImGui.BeginPopup("TimelineContext"u8))
+        {
             return;
         }
 
-        if (!ImGui.IsMouseDragging(ImGuiMouseButton.Left)) return;
-        var delta = MathF.Round((ImGui.GetMousePos().X - drag.MouseStartX) / drag.PixelsPerFrame);
-        if (delta == drag.LastDelta) return;
-        drag.LastDelta = delta;
-        if (ApplyDragDelta(drag, delta)) {
-            drag.Changed = true;
-            MarkModified();
+        if (contextProperty is not null)
+        {
+            if(ImGui.InputDouble("Key value"u8, ref newKeyValue) && contextKey is not null && double.IsFinite(newKeyValue)) contextKey.Value=newKeyValue;
         }
-    }
-
-    private static bool ApplyDragDelta(DragState drag, float delta)
-    {
-        var before = GetDragFrames(drag).ToArray();
-        if (delta == 0f) {
-            if (drag.Track != null) {
-                drag.Track.Track.startFrame = drag.Track.Start;
-                drag.Track.Track.endFrame = drag.Track.End;
-                foreach (var property in drag.Track.BoundaryProperties) {
-                    property.Property.Info.startFrame = property.Start;
-                    property.Property.Info.endFrame = property.End;
-                }
-                foreach (var (key, frame) in drag.Track.BoundaryKeys) key.frame = frame;
+        else
+        {
+            if(contextTrack is not null && ImGui.MenuItem("Copy track")) CopyTrack(contextTrack);
+            bool canPaste = contextClip is not null && copiedTrack is not null
+                && copiedTrack.StartFrame >= contextClip.StartFrame && copiedTrack.EndFrame <= contextClip.EndFrame;
+            ImGui.BeginDisabled(!canPaste);
+            if(ImGui.MenuItem("Paste as new track")) PasteTrack(contextClip!);
+            ImGui.EndDisabled();
+            ImGui.Separator();
+        }
+        if (contextKey is not null && contextProperty is not null)
+        {
+            selectedKey = contextKey;
+            selectedProperty = contextProperty;
+            if (ImGui.MenuItem("Copy key"u8))
+            {
+                copiedKeyValue = contextKey.Value;
             }
-            foreach (var (_, key, frame) in drag.Keys) key.frame = frame;
-            foreach (var snapshot in drag.Properties) {
-                snapshot.Property.Info.startFrame = snapshot.Start;
-                snapshot.Property.Info.endFrame = snapshot.End;
-                foreach (var (key, frame) in snapshot.Keys) key.frame = frame;
+            if (copiedKeyValue.HasValue && ImGui.MenuItem("Paste key here"u8))
+            {
+                AddKey(contextProperty, contextFrame, copiedKeyValue);
             }
-        } else {
-            switch (drag.Mode) {
-                case DragMode.MoveKeys:
-                    foreach (var (_, key, frame) in drag.Keys) {
-                        key.frame = frame + ClampDragDelta(delta, drag.MinimumFrame, drag.MaximumFrame);
-                    }
-                    break;
-                case DragMode.MoveRange:
-                    var minimumDelta = MathF.Ceiling(drag.MinimumFrame - drag.RangeStart);
-                    var maximumDelta = MathF.Floor(drag.MaximumFrame - drag.RangeEnd);
-                    var moveDelta = ClampDragDelta(delta, minimumDelta, maximumDelta);
-                    foreach (var snapshot in drag.Properties) {
-                        snapshot.Property.Info.startFrame = snapshot.Start + moveDelta;
-                        snapshot.Property.Info.endFrame = snapshot.End + moveDelta;
-                        foreach (var (key, frame) in snapshot.Keys) key.frame = frame + moveDelta;
-                    }
-                    break;
-                case DragMode.ResizeStart:
-                    var firstKey = drag.Properties.SelectMany(item => item.Keys).Select(item => item.Frame).Where(float.IsFinite).DefaultIfEmpty(drag.RangeEnd).Min();
-                    var latestStart = MathF.Min(firstKey, drag.RangeEnd);
-                    var earliestStart = MathF.Min(drag.MinimumFrame, latestStart);
-                    var start = Math.Clamp(drag.RangeStart + delta, earliestStart, latestStart);
-                    foreach (var snapshot in drag.Properties) snapshot.Property.Info.startFrame = snapshot.Start + start - drag.RangeStart;
-                    break;
-                case DragMode.ResizeEnd:
-                    var lastKey = drag.Properties.SelectMany(item => item.Keys).Select(item => item.Frame).Where(float.IsFinite).DefaultIfEmpty(drag.RangeStart).Max();
-                    var earliestEnd = MathF.Max(lastKey, drag.RangeStart);
-                    var latestEnd = MathF.Max(drag.MaximumFrame, earliestEnd);
-                    var end = Math.Clamp(drag.RangeEnd + delta, earliestEnd, latestEnd);
-                    foreach (var snapshot in drag.Properties) snapshot.Property.Info.endFrame = snapshot.End + end - drag.RangeEnd;
-                    break;
-                case DragMode.ResizeTrackStart:
-                    if (drag.Track == null) break;
-                    var trackStartLimits = GetTrackStartLimits(drag.Track.Track);
-                    var startLimit = trackStartLimits.Count == 0
-                        ? drag.Track.End - 1f
-                        : trackStartLimits.Min();
-                    var upperStart = MathF.Min(drag.Track.End - 1f, startLimit);
-                    if (drag.MoveBoundaryKeys) {
-                        upperStart = EnumerateTimelineProperties(drag.Track.Track.Properties).Where(IsValidRange)
-                            .Select(property => drag.Track.BoundaryProperties.Any(item => ReferenceEquals(item.Property, property))
-                                ? property.Info.endFrame : property.Info.startFrame)
-                            .Concat(EnumerateKeys(drag.Track.Track.Properties)
-                                .Where(item => IsValidRange(item.Property) && float.IsFinite(item.Key.frame)
-                                    && !drag.Track.BoundaryKeys.Any(boundary => ReferenceEquals(boundary.Key, item.Key)))
-                                .Select(item => item.Key.frame))
-                            .Append(drag.Track.End - 1f).Min();
-                    }
-                    if (drag.MinimumFrame > upperStart) break;
-                    var newStart = Math.Clamp(drag.Track.Start + delta, drag.MinimumFrame, upperStart);
-                    drag.Track.Track.startFrame = newStart;
-                    if (drag.MoveBoundaryKeys) ApplyBoundaryPropertyDelta(drag.Track.BoundaryProperties, newStart - drag.Track.Start, true);
-                    if (drag.MoveBoundaryKeys) ApplyBoundaryKeyDelta(drag.Track.BoundaryKeys, newStart - drag.Track.Start);
-                    break;
-                case DragMode.ResizeTrackEnd:
-                    if (drag.Track == null) break;
-                    var trackEndLimits = GetTrackEndLimits(drag.Track.Track);
-                    var endLimit = trackEndLimits.Count == 0
-                        ? drag.Track.Start + 1f
-                        : trackEndLimits.Max();
-                    var lowerEnd = MathF.Max(drag.Track.Start + 1f, endLimit);
-                    if (drag.MoveBoundaryKeys) {
-                        lowerEnd = EnumerateTimelineProperties(drag.Track.Track.Properties).Where(IsValidRange)
-                            .Select(property => drag.Track.BoundaryProperties.Any(item => ReferenceEquals(item.Property, property))
-                                ? property.Info.startFrame : property.Info.endFrame)
-                            .Concat(EnumerateKeys(drag.Track.Track.Properties)
-                                .Where(item => IsValidRange(item.Property) && float.IsFinite(item.Key.frame)
-                                    && !drag.Track.BoundaryKeys.Any(boundary => ReferenceEquals(boundary.Key, item.Key)))
-                                .Select(item => item.Key.frame))
-                            .Append(drag.Track.Start + 1f).Max();
-                    }
-                    if (lowerEnd > drag.MaximumFrame) break;
-                    var newEnd = Math.Clamp(drag.Track.End + delta, lowerEnd, drag.MaximumFrame);
-                    drag.Track.Track.endFrame = newEnd;
-                    if (drag.MoveBoundaryKeys) ApplyBoundaryPropertyDelta(drag.Track.BoundaryProperties, newEnd - drag.Track.End, false);
-                    if (drag.MoveBoundaryKeys) ApplyBoundaryKeyDelta(drag.Track.BoundaryKeys, newEnd - drag.Track.End);
-                    break;
+            if (ImGui.MenuItem("Remove key"u8))
+            {
+                contextProperty.Keys.Remove(contextKey);
+                selectedKey = null;
             }
         }
-        return !before.SequenceEqual(GetDragFrames(drag));
-    }
-
-    private static void ApplyBoundaryKeyDelta(List<(KeyBase Key, float Frame)> keys, float delta)
-    {
-        foreach (var (key, frame) in keys) key.frame = frame + delta;
-    }
-
-    private static void ApplyBoundaryPropertyDelta(List<PropertySnapshot> properties, float delta, bool startEdge)
-    {
-        foreach (var snapshot in properties) {
-            if (startEdge) snapshot.Property.Info.startFrame = snapshot.Start + delta;
-            else snapshot.Property.Info.endFrame = snapshot.End + delta;
+        else if (contextProperty is not null)
+        {
+            selectedProperty = contextProperty;
+            if (ImGui.MenuItem("Add key here"u8))
+            {
+                AddKey(contextProperty, contextFrame, newKeyValue);
+            }
+            if (copiedKeyValue.HasValue && ImGui.MenuItem("Paste key here"u8))
+            {
+                AddKey(contextProperty, contextFrame, copiedKeyValue);
+            }
         }
+
+        ImGui.EndPopup();
     }
 
-    private static List<float> GetTrackStartLimits(ClipTrack track) => EnumerateTimelineProperties(track.Properties)
-        .Where(IsValidRange)
-        .SelectMany(property => new[] { property.Info.startFrame }.Concat(
-            property.Keys?.Select(key => key.frame) ?? []))
-        .Where(float.IsFinite)
-        .ToList();
-
-    private static List<float> GetTrackEndLimits(ClipTrack track) => EnumerateTimelineProperties(track.Properties)
-        .Where(IsValidRange)
-        .SelectMany(property => new[] { property.Info.endFrame }.Concat(
-            property.Keys?.Select(key => key.frame) ?? []))
-        .Where(float.IsFinite)
-        .ToList();
-
-    private static IEnumerable<float> GetDragFrames(DragState drag) =>
-        drag.Keys.Select(item => item.Key.frame)
-            .Concat(drag.Properties.SelectMany(item =>
-                new[] { item.Property.Info.startFrame, item.Property.Info.endFrame }.Concat(item.Keys.Select(key => key.Key.frame))))
-            .Concat(drag.Track == null ? [] : new[] { drag.Track.Track.startFrame, drag.Track.Track.endFrame }
-                .Concat(drag.Track.BoundaryProperties.SelectMany(property => new[] { property.Property.Info.startFrame, property.Property.Info.endFrame }))
-                .Concat(drag.Track.BoundaryKeys.Select(key => key.Key.frame)));
-
-    private static float ClampDragDelta(float delta, float minimum, float maximum)
+    private TimelineTrack CloneTrack(TimelineTrack source)
     {
-        minimum = MathF.Ceiling(minimum);
-        maximum = MathF.Floor(maximum);
-        return delta == 0f || minimum > maximum || !float.IsFinite(minimum) || !float.IsFinite(maximum)
-            ? 0f : Math.Clamp(delta, minimum, maximum);
+        var clone = new TimelineTrack(source.Name, source.Details, source.StartFrame, source.EndFrame);
+        foreach (var property in source.Properties)
+        {
+            var copy = new TimelineProperty(property.Name, property.ValueRange, property.EndsOnMinusOne, property.StartFrame, property.EndFrame);
+            foreach (var key in property.Keys) copy.Keys.Add(new TimelineKey(key.Name, key.Frame, key.Value));
+            clone.Properties.Add(copy);
+        }
+        return clone;
     }
 
-    private void FinishDrag(DragState completed)
+    private void CopyTrack(TimelineTrack track) => copiedTrack = CloneTrack(track);
+
+    private TimelineTrack? PasteTrack(Motclip owner)
     {
-        if (!completed.Changed || (!completed.Keys.Any(item => item.Key.frame != item.Frame)
-            && !completed.Properties.Any(item => item.Property.Info.startFrame != item.Start || item.Property.Info.endFrame != item.End
-                || item.Keys.Any(key => key.Key.frame != key.Frame))
-            && (completed.Track == null || (completed.Track.Track.startFrame == completed.Track.Start
-                && completed.Track.Track.endFrame == completed.Track.End
-                && completed.Track.BoundaryProperties.All(property => property.Property.Info.startFrame == property.Start
-                    && property.Property.Info.endFrame == property.End)
-                && completed.Track.BoundaryKeys.All(key => key.Key.frame == key.Frame))))) return;
-        if (completed.Mode == DragMode.MoveKeys) {
-            var before = completed.Keys.Select(item => (item.Key, item.Frame)).ToList();
-            var after = completed.Keys.Select(item => (item.Key, item.Key.frame)).ToList();
-            UndoRedo.RecordCallback(null, () => ApplyKeyFrames(after), () => ApplyKeyFrames(before));
+        if(copiedTrack is null || copiedTrack.StartFrame < owner.StartFrame || copiedTrack.EndFrame > owner.EndFrame) return null;
+        var clone = CloneTrack(copiedTrack);
+        owner.Tracks.Add(clone);
+        overviewView.Initialized = false;
+        return clone;
+    }
+
+    private void AddKey(TimelineProperty property, double frame, double? value)
+    {
+        TimelineTrack? track = motlist.Motclips.SelectMany(clip => clip.Tracks)
+            .FirstOrDefault(candidate => candidate.Properties.Contains(property));
+        if (track is null)
+        {
             return;
         }
 
-        if (completed.Track != null) {
-            var beforeTrack = completed.Track with {
-                BoundaryProperties = completed.Track.BoundaryProperties.ToList(),
-                BoundaryKeys = completed.Track.BoundaryKeys.ToList()
-            };
-            var afterTrack = new TrackSnapshot(completed.Track.Track, completed.Track.Track.startFrame,
-                completed.Track.Track.endFrame,
-                completed.Track.BoundaryProperties.Select(property => new PropertySnapshot(
-                    property.Property,
-                    property.Property.Info.startFrame,
-                    property.Property.Info.endFrame,
-                    property.Keys.Select(key => (key.Key, key.Key.frame)).ToList())).ToList(),
-                completed.Track.BoundaryKeys.Select(key => (key.Key, key.Key.frame)).ToList());
-            UndoRedo.RecordCallback(null, () => ApplyTrackSnapshot(afterTrack), () => ApplyTrackSnapshot(beforeTrack));
+        double min = Math.Max(track.StartFrame, property.StartFrame ?? track.StartFrame);
+        double max = Math.Min(track.EndFrame, property.EndFrame ?? track.EndFrame);
+        if (max < min)
+        {
             return;
         }
 
-        var beforeRanges = completed.Properties;
-        var afterRanges = CaptureProperties(beforeRanges.Select(item => item.Property));
-        UndoRedo.RecordCallback(null, () => ApplyPropertyFrames(afterRanges), () => ApplyPropertyFrames(beforeRanges));
+        TimelineKey key = new($"Key {property.Keys.Count + 1}", Math.Clamp(SnapFrame(frame), min, max), value);
+        property.Keys.Add(key);
+        property.Keys.Sort((left, right) => left.Frame.CompareTo(right.Frame));
+        selectedProperty = property;
+        selectedKey = key;
     }
 
-    private void ApplyKeyFrames(List<(KeyBase Key, float Frame)> values)
+    private void HandleKeyboardShortcuts(TimelineView view, double sequenceStart, double sequenceEnd)
     {
-        foreach (var (key, frame) in values) key.frame = frame;
-        MarkModified();
-    }
-
-    private void ApplyPropertyFrames(List<PropertySnapshot> values)
-    {
-        foreach (var snapshot in values) {
-            snapshot.Property.Info.startFrame = snapshot.Start;
-            snapshot.Property.Info.endFrame = snapshot.End;
-            foreach (var (key, frame) in snapshot.Keys) key.frame = frame;
+        if (!ReferenceEquals(keyboardView,view) || ImGui.GetIO().WantTextInput || ImGui.IsAnyItemActive() || ImGui.IsPopupOpen("",ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel) || activeDrag is not null || rightView is not null || !ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
+        {
+            return;
         }
-        MarkModified();
+
+        var io=ImGui.GetIO();
+        if(io.KeyAlt||io.KeyShift||io.KeySuper)return;
+        bool control=io.KeyCtrl;
+        if (control && ImGui.IsKeyPressed(ImGuiKey.C) && selectedKey is not null)
+        {
+            copiedKeyValue = selectedKey.Value;
+        }
+        if (control && ImGui.IsKeyPressed(ImGuiKey.V) && copiedKeyValue.HasValue && selectedProperty is not null)
+        {
+            AddKey(selectedProperty, currentFrame, copiedKeyValue);
+        }
+        if (!control && ImGui.IsKeyPressed(ImGuiKey.Delete) && selectedKey is not null && selectedProperty is not null)
+        {
+            selectedProperty.Keys.Remove(selectedKey);
+            selectedKey = null;
+        }
+        if (!control && ImGui.IsKeyPressed(ImGuiKey.LeftArrow))
+        {
+            currentFrame = SnapFrame(Math.Max(sequenceStart, currentFrame - 1));
+        }
+        if (!control && ImGui.IsKeyPressed(ImGuiKey.RightArrow))
+        {
+            currentFrame = SnapFrame(Math.Min(sequenceEnd, currentFrame + 1));
+        }
+        if (!control && ImGui.IsKeyPressed(ImGuiKey.Home))
+        {
+            currentFrame = sequenceStart;
+        }
+        if (!control && ImGui.IsKeyPressed(ImGuiKey.End))
+        {
+            currentFrame = sequenceEnd;
+        }
+        if (!control && (ImGui.IsKeyPressed(ImGuiKey.UpArrow) || ImGui.IsKeyPressed(ImGuiKey.DownArrow)))
+        {
+            IEnumerable<double> frames = selectedProperty is not null
+                ? selectedProperty.Keys.Select(key => key.Frame)
+                : motlist.Motclips.SelectMany(clip => clip.Tracks)
+                    .SelectMany(track => track.Properties)
+                    .SelectMany(property => property.Keys.Select(key => key.Frame));
+            double? target = ImGui.IsKeyPressed(ImGuiKey.UpArrow)
+                ? frames.Where(frame => frame < currentFrame - 0.001).DefaultIfEmpty(sequenceStart).Max()
+                : frames.Where(frame => frame > currentFrame + 0.001).DefaultIfEmpty(sequenceEnd).Min();
+            currentFrame = Math.Clamp(SnapFrame(target.Value), sequenceStart, sequenceEnd);
+        }
+        if (!control && ImGui.IsKeyPressed(ImGuiKey.K) && selectedProperty is not null)
+        {
+            AddKey(selectedProperty, currentFrame, selectedProperty.Keys.LastOrDefault()?.Value ?? newKeyValue);
+        }
     }
 
-    private void ApplyTrackSnapshot(TrackSnapshot snapshot)
+    // One viewport owns a gesture. No ImPlot navigation runs beside this controller.
+    private sealed class TimelineView
     {
-        snapshot.Track.startFrame = snapshot.Start;
-        snapshot.Track.endFrame = snapshot.End;
-        foreach (var property in snapshot.BoundaryProperties) {
-            property.Property.Info.startFrame = property.Start;
-            property.Property.Info.endFrame = property.End;
+        public string Id {get;}
+        public bool Initialized,FitAllRows;
+        public double XMin,XMax,YMin,YMax;
+        public Vector2 PlotMin,PlotSize;
+        public TimelineView(string id){Id=id;}
+        public void Initialize(List<VisibleLane> lanes,double start,double end)
+        {
+            if(Initialized)return;double pad=Math.Max(1,(end-start)*.025);
+            XMin=start-pad;XMax=end+pad;YMax=Math.Max(.5,lanes.Count-.5);
+            YMin=YMax-Math.Max(2,FitAllRows?lanes.Count:Math.Min(lanes.Count,6));Initialized=true;FitAllRows=false;
         }
-        foreach (var (key, frame) in snapshot.BoundaryKeys) key.frame = frame;
-        MarkModified();
+    }
+    private readonly TimelineView overviewView=new("##BehaviorOverviewPlot");
+    private readonly Dictionary<TimelineTrack,TimelineView> propertyViews=new();
+    private TimelineView? keyboardView,rightView;
+    private TimelineView PropertyView(TimelineTrack track)
+    {
+        if(!propertyViews.TryGetValue(track,out var view)){view=new("##PropertyPlot"+propertyViews.Count);propertyViews.Add(track,view);}return view;
+    }
+    private bool IsTimelinePlotHovered()
+    {
+        Vector2 min=ImPlot.GetPlotPos(),max=min+ImPlot.GetPlotSize();
+        // NoInputs disables ImPlot hover reporting too. ImGui still owns window/popup routing.
+        return ImGui.IsWindowHovered()&&ImGui.IsMouseHoveringRect(min,max)
+            &&!ImGui.IsPopupOpen("",ImGuiPopupFlags.AnyPopupId|ImGuiPopupFlags.AnyPopupLevel);
+    }
+    private bool HasModifiers(){var io=ImGui.GetIO();return io.KeyCtrl||io.KeyAlt||io.KeyShift||io.KeySuper;}
+    private void SelectTrack(Motclip clip,TimelineTrack track)
+    {
+        if(!ReferenceEquals(selectedTrack,track)){CancelGesture();selectedProperty=null;selectedKey=null;}
+        selectedClip=clip;selectedTrack=track;
+    }
+    private List<VisibleLane> BuildPropertyLanes(Motclip clip,TimelineTrack track)
+    {
+        var lanes=new List<VisibleLane>(track.Properties.Count);
+        foreach(var p in track.Properties)lanes.Add(new(p.Name,$"{clip.Name}/{track.Name}/{p.Name}",0,p,track,clip,
+            p.StartFrame??(p.Keys.Count>0?p.Keys.Min(k=>k.Frame):track.StartFrame),
+            p.EndFrame??(p.Keys.Count>0?p.Keys.Max(k=>k.Frame):track.EndFrame)));
+        for(int i=0;i<lanes.Count;i++)lanes[i]=lanes[i] with{Y=lanes.Count-i-1};return lanes;
+    }
+    private void CancelGesture()
+    {
+        var d=activeDrag;if(d is null)return;
+        if(d.Mode==EditMode.ReorderTrack && d.TrackOrder is not null){d.Lane.Clip.Tracks.Clear();d.Lane.Clip.Tracks.AddRange(d.TrackOrder);}
+        else if(d.Mode==EditMode.ReorderProperty && d.PropertyOrder is not null){d.Track!.Properties.Clear();d.Track.Properties.AddRange(d.PropertyOrder);}
+        else if(d.Mode==EditMode.Pan){d.View.XMin=d.InitialXMin;d.View.XMax=d.InitialXMax;d.View.YMin=d.InitialYMin;d.View.YMax=d.InitialYMax;}
+        else if(d.Mode==EditMode.Playhead)currentFrame=d.InitialFrame;
+        else if(d.Mode==EditMode.Key&&d.Key is not null)d.Key.Frame=d.InitialFrame;
+        else{
+            if(d.Track is not null&&d.Property is null){d.Track.StartFrame=d.InitialStart;d.Track.EndFrame=d.InitialEnd;}
+            foreach(var p in d.Properties){p.Property.StartFrame=p.Start;p.Property.EndFrame=p.End;foreach(var k in p.Keys)k.Key.Frame=k.Frame;}
+        }
+        if(d.Property is not null)foreach(var key in d.CreatedKeys){d.Property.Keys.Remove(key);if(ReferenceEquals(selectedKey,key))selectedKey=d.Key;}
+        activeDrag=null;
+    }
+    private double FrameStep(double value)=>snappingEnabled?Math.Round(value,MidpointRounding.AwayFromZero):value;
+    private void AdvanceGesture(TimelineView view,double sequenceStart,double sequenceEnd)
+    {
+        var d=activeDrag;if(d is null||!ReferenceEquals(d.View,view))return;
+        if(ImGui.IsKeyPressed(ImGuiKey.Escape,false)){CancelGesture();return;}
+        if(!ImGui.IsMouseDown(d.Button))
+        {
+            if(d.Property is not null && d.Mode is EditMode.Key or EditMode.PropertyEndpoint)d.Property.Keys.Sort((a,b)=>a.Frame.CompareTo(b.Frame));
+            activeDrag=null;
+            if(d.Mode==EditMode.Pan && !d.Started && d.Button==ImGuiMouseButton.Left || d.Mode is EditMode.ReorderTrack or EditMode.ReorderProperty) SelectLane(d.Lane,d.Key);
+            return;
+        }
+        var mouse=ImGui.GetMousePos();
+        if(!d.Started){if(Vector2.DistanceSquared(mouse,new(d.StartMouseX,d.StartMouseY))<25)return;d.Started=true;}
+        if(ImGui.GetIO().MouseDelta==Vector2.Zero)return;
+        if(d.Mode is EditMode.ReorderTrack or EditMode.ReorderProperty)
+        {
+            int rows=(int)Math.Round((mouse.Y-d.StartMouseY)/Math.Max(1,d.StartPlotHeight)*(d.InitialYMax-d.InitialYMin),MidpointRounding.AwayFromZero);
+            if(d.Mode==EditMode.ReorderTrack && d.TrackOrder is not null && d.Track is not null)
+            {
+                int target=Math.Clamp(d.TrackOrder.IndexOf(d.Track)+rows,0,d.TrackOrder.Count-1);
+                var order=d.TrackOrder.Where(t=>!ReferenceEquals(t,d.Track)).ToList();order.Insert(target,d.Track);
+                d.Lane.Clip.Tracks.Clear();d.Lane.Clip.Tracks.AddRange(order);
+            }
+            else if(d.PropertyOrder is not null && d.Property is not null)
+            {
+                int target=Math.Clamp(d.PropertyOrder.IndexOf(d.Property)+rows,0,d.PropertyOrder.Count-1);
+                var order=d.PropertyOrder.Where(p=>!ReferenceEquals(p,d.Property)).ToList();order.Insert(target,d.Property);
+                d.Track!.Properties.Clear();d.Track.Properties.AddRange(order);
+            }
+            return;
+        }
+        double delta=(mouse.X-d.StartMouseX)/Math.Max(1,d.StartPlotWidth)*(d.InitialXMax-d.InitialXMin);
+        if(d.Mode==EditMode.Pan){
+            view.XMin=d.InitialXMin-delta;view.XMax=d.InitialXMax-delta;
+            double dy=(mouse.Y-d.StartMouseY)/Math.Max(1,d.StartPlotHeight)*(d.InitialYMax-d.InitialYMin);
+            view.YMin=d.InitialYMin+dy;view.YMax=d.InitialYMax+dy;return;
+        }
+        delta=FrameStep(delta);
+        if(d.Mode==EditMode.Playhead){currentFrame=Math.Clamp(d.InitialFrame+delta,sequenceStart,sequenceEnd);return;}
+        if(d.Track is null)return;
+        if(d.Mode==EditMode.Key&&d.Key is not null&&d.Property is not null){
+            double min=Math.Max(d.Track.StartFrame,d.Property.StartFrame??d.Track.StartFrame),max=Math.Min(d.Track.EndFrame,d.Property.EndFrame??d.Track.EndFrame);
+            if(min<=max)d.Key.Frame=Math.Clamp(d.InitialFrame+delta,min,max);return;
+        }
+        if(d.Mode==EditMode.PropertyEndpoint && d.Property is not null)
+        {
+            double min=Math.Max(d.Track.StartFrame,d.InitialStart+(snappingEnabled?1:.001));
+            if(min>d.Track.EndFrame)return;
+            double end=Math.Clamp(d.InitialEnd+delta,min,d.Track.EndFrame);
+            if(d.EndKey is null)
+            {
+                d.EndKey=new TimelineKey($"Key {d.Property.Keys.Count+1}",end,-1);
+                d.Property.Keys.Add(d.EndKey);d.CreatedKeys.Add(d.EndKey);
+            }
+            d.EndKey.Frame=end;
+            var original=d.Properties[0];
+            bool known=original.Start.HasValue&&original.End.HasValue&&!(original.Start==-1&&original.End==-1);
+            d.Property.StartFrame=known?Math.Min(original.Start!.Value,d.InitialStart):d.InitialStart;
+            d.Property.EndFrame=known?Math.Max(original.End!.Value,end):Math.Max(end,d.Keys.Max(k=>k.Frame));
+            selectedKey=d.EndKey;
+            return;
+        }
+        if(d.Mode==EditMode.CreatePropertyRange && d.Property is not null)
+        {
+            double start=d.InitialStart,end=Math.Clamp(d.InitialEnd+delta,start,d.Track.EndFrame);
+            d.Property.StartFrame=start;d.Property.EndFrame=Math.Max(end,d.Keys.Count>0?d.Keys.Max(k=>k.Frame):end);
+            return;
+        }
+        if(d.Mode==EditMode.TrackMove||d.Mode==EditMode.PropertyMove){
+            double min=d.Property is null?d.Lane.Clip.StartFrame:d.Track.StartFrame;
+            double max=d.Property is null?d.Lane.Clip.EndFrame:d.Track.EndFrame;
+            if(max-min<d.InitialEnd-d.InitialStart)return;
+            delta=Math.Clamp(delta,min-d.InitialStart,max-d.InitialEnd);
+            if(d.Property is null){d.Track.StartFrame=d.InitialStart+delta;d.Track.EndFrame=d.InitialEnd+delta;}
+            foreach(var p in d.Properties){
+                bool disabled=p.Start==-1&&p.End==-1;
+                if(!disabled){if(p.Start.HasValue)p.Property.StartFrame=p.Start.Value+delta;if(p.End.HasValue)p.Property.EndFrame=p.End.Value+delta;}
+                foreach(var k in p.Keys)k.Key.Frame=k.Frame+delta;
+            }
+            return;
+        }
+        if(d.Mode==EditMode.TrackStart){
+            double first=d.Properties.SelectMany(p=>(p.Start.HasValue&&!(p.Start==-1&&p.End==-1)?new[]{p.Start.Value}:Array.Empty<double>()).Concat(p.Keys.Select(k=>k.Frame))).DefaultIfEmpty(d.InitialEnd).Min();
+            double max=Math.Min(d.InitialEnd,first);if(d.Lane.Clip.StartFrame<=max)d.Track.StartFrame=Math.Clamp(d.InitialStart+delta,d.Lane.Clip.StartFrame,max);
+        }else if(d.Mode==EditMode.TrackEnd){
+            double last=d.Properties.SelectMany(p=>(p.End.HasValue&&!(p.Start==-1&&p.End==-1)?new[]{p.End.Value}:Array.Empty<double>()).Concat(p.Keys.Select(k=>k.Frame))).DefaultIfEmpty(d.InitialStart).Max();
+            double min=Math.Max(d.InitialStart,last);if(min<=d.Lane.Clip.EndFrame)d.Track.EndFrame=Math.Clamp(d.InitialEnd+delta,min,d.Lane.Clip.EndFrame);
+        }else if(d.Property is not null){
+            var p=d.Property;
+            if(d.Mode==EditMode.PropertyStart){double max=Math.Min(d.InitialEnd,d.Keys.Count>0?d.Keys.Min(k=>k.Frame):d.InitialEnd);if(d.Track.StartFrame<=max)p.StartFrame=Math.Clamp(d.InitialStart+delta,d.Track.StartFrame,max);}
+            else if(d.Mode==EditMode.PropertyEnd){double min=Math.Max(d.InitialStart,d.Keys.Count>0?d.Keys.Max(k=>k.Frame):d.InitialStart);if(min<=d.Track.EndFrame)p.EndFrame=Math.Clamp(d.InitialEnd+delta,min,d.Track.EndFrame);}
+        }
+    }
+    private TimelineDrag Gesture(EditMode mode,TimelineView view,VisibleLane lane=default,TimelineKey? key=null, ImGuiMouseButton button=ImGuiMouseButton.Left, double? start=null, double? end=null, TimelineKey? endKey=null)
+    {
+        var mouse=ImGui.GetMousePos();var t=lane.Track;var p=lane.Property;
+        return new TimelineDrag{
+            Mode=mode,View=view,Button=button,EndKey=endKey,
+            TrackOrder=mode==EditMode.ReorderTrack?lane.Clip.Tracks.ToList():null,
+            PropertyOrder=mode==EditMode.ReorderProperty?t?.Properties.ToList():null,
+            Lane=lane,Track=t,Property=p,Key=key,InitialStart=start??lane.StartFrame,InitialEnd=end??lane.EndFrame,InitialFrame=key?.Frame??currentFrame,
+            StartMouseX=mouse.X,StartMouseY=mouse.Y,StartPlotWidth=view.PlotSize.X,StartPlotHeight=view.PlotSize.Y,
+            InitialXMin=view.XMin,InitialXMax=view.XMax,InitialYMin=view.YMin,InitialYMax=view.YMax,
+            Keys=p?.Keys.Select(k=>(k,k.Frame)).ToList()??new(),
+            Properties=p is not null?new(){CaptureProperty(p)}:t?.Properties.Select(CaptureProperty).ToList()??new()
+        };
+    }
+    private PropertyDragSnapshot CaptureProperty(TimelineProperty p)=>new(p,p.StartFrame,p.EndFrame,p.Keys.Select(k=>(k,k.Frame)).ToList());
+    private double SnapFrame(double frame)=>FrameStep(frame);
+    private readonly record struct Pick(VisibleLane Lane,TimelineKey? Key,EditMode Mode);
+    private Pick? PickTimeline(List<VisibleLane> lanes,Vector2 mouse)
+    {
+        foreach(var lane in lanes){
+            var center=ImPlot.PlotToPixels(0,lane.Y);var one=ImPlot.PlotToPixels(0,lane.Y+1);
+            if(Math.Abs(mouse.Y-center.Y)>Math.Abs(one.Y-center.Y)*.5f)continue;
+            if(lane.Property is not null){
+                TimelineKey? nearest=null;float distance=81;
+                foreach(var key in lane.Property.Keys){float d=Vector2.DistanceSquared(mouse,KeyPosition(lane,key));if(d<distance){distance=d;nearest=key;}}
+                if(nearest is not null)return new(lane,nearest,EditMode.Key);
+            }
+            var box=GetRangeBox(lane.StartFrame,lane.EndFrame,lane);
+            if(mouse.X<box.Min.X||mouse.X>box.Max.X||mouse.Y<box.Min.Y||mouse.Y>box.Max.Y)continue;
+            if(lane.Track is null)return new(lane,null,EditMode.None);
+            if(lane.Property is not null&&(!lane.Property.StartFrame.HasValue||!lane.Property.EndFrame.HasValue||lane.Property.StartFrame==-1&&lane.Property.EndFrame==-1))continue;
+            float grip=Math.Min(8,(box.Max.X-box.Min.X)*.2f);
+            bool start=mouse.X-box.Min.X<=grip,end=box.Max.X-mouse.X<=grip;
+            return new(lane,null,lane.Property is null?(start?EditMode.TrackStart:end?EditMode.TrackEnd:EditMode.TrackMove):(start?EditMode.PropertyStart:end?EditMode.PropertyEnd:EditMode.PropertyMove));
+        }return null;
+    }
+    private VisibleLane? LaneUnderMouse(List<VisibleLane> lanes,Vector2 mouse)
+    {
+        double y=ImPlot.PixelsToPlot(mouse).Y;
+        foreach(var lane in lanes) if(Math.Abs(y-lane.Y)<=.5)return lane;
+        return null;
+    }
+
+    private void SelectLane(VisibleLane lane,TimelineKey? key)
+    {
+        if(lane.Clip is null)return;
+        if(lane.Track is null)
+        {
+            if(!ReferenceEquals(selectedClip,lane.Clip)){selectedTrack=null;selectedProperty=null;selectedKey=null;}
+            selectedClip=lane.Clip;collapsedMotclips.Remove(lane.Clip);collapsedTrackGroups.Remove(lane.Clip);return;
+        }
+        SelectTrack(lane.Clip,lane.Track);selectedProperty=lane.Property;selectedKey=key;
+    }
+
+    private void BeginRangeExtension(TimelineView view,VisibleLane lane,TimelineKey? key,EditMode pickedMode)
+    {
+        if(lane.Track is null)return;
+        SelectLane(lane,key);
+        var property=lane.Property;
+        if(property is not null && key is not null && property.EndsOnMinusOne && key.Value.HasValue)
+        {
+            bool terminal=key.Value==-1;
+            TimelineKey? end=terminal?key:property.Keys.Where(k=>k.Frame>key.Frame&&k.Value==-1).OrderBy(k=>k.Frame).FirstOrDefault();
+            TimelineKey? start=terminal?property.Keys.Where(k=>k.Frame<key.Frame&&k.Value.HasValue&&k.Value!=-1).OrderByDescending(k=>k.Frame).FirstOrDefault():key;
+            if(start is not null && start.Frame<lane.Track.EndFrame)
+            {
+                activeDrag=Gesture(EditMode.PropertyEndpoint,view,lane,key,ImGuiMouseButton.Right,start.Frame,end?.Frame??start.Frame,end);
+                return;
+            }
+        }
+        if(property is not null && (!property.StartFrame.HasValue || !property.EndFrame.HasValue || property.StartFrame==-1&&property.EndFrame==-1))
+        {
+            double start=property.Keys.Count>0?property.Keys.Min(k=>k.Frame):Math.Clamp(FrameStep(ImPlot.PixelsToPlot(ImGui.GetMousePos()).X),lane.Track.StartFrame,lane.Track.EndFrame);
+            double end=property.Keys.Count>0?Math.Max(start,property.Keys.Max(k=>k.Frame)):start;
+            activeDrag=Gesture(EditMode.CreatePropertyRange,view,lane,key,ImGuiMouseButton.Right,start,end);
+            return;
+        }
+        // Shift+right on a start grip resizes the start; otherwise it extends the end.
+        bool startEdge=pickedMode is EditMode.TrackStart or EditMode.PropertyStart;
+        EditMode mode=property is null?(startEdge&&lane.EndFrame>lane.StartFrame?EditMode.TrackStart:EditMode.TrackEnd)
+            :(startEdge&&lane.EndFrame>lane.StartFrame?EditMode.PropertyStart:EditMode.PropertyEnd);
+        activeDrag=Gesture(mode,view,lane,key,ImGuiMouseButton.Right);
+    }
+
+    private void HandleTimelineInteraction(List<VisibleLane> lanes,TimelineView view,double sequenceStart,double sequenceEnd)
+    {
+        view.PlotMin=ImPlot.GetPlotPos();view.PlotSize=ImPlot.GetPlotSize();
+        if(activeDrag is not null)return;
+        bool hovered=IsTimelinePlotHovered();
+        var io=ImGui.GetIO();var mouse=ImGui.GetMousePos();
+        bool plain=!HasModifiers(),shift=io.KeyShift&&!io.KeyCtrl&&!io.KeyAlt&&!io.KeySuper,alt=io.KeyAlt&&!io.KeyCtrl&&!io.KeyShift&&!io.KeySuper,context=false;
+        if(rightView is not null)
+        {
+            if(!ReferenceEquals(rightView,view))return;
+            if(!ImGui.IsMouseReleased(ImGuiMouseButton.Right))return;
+            rightView=null;
+            context=hovered&&plain&&Vector2.DistanceSquared(mouse,contextMouseDownPosition)<=16;
+            if(!context)return;
+        }
+        if(!hovered)return;
+        bool leftHeld=ImGui.IsMouseDown(ImGuiMouseButton.Left),rightHeld=ImGui.IsMouseDown(ImGuiMouseButton.Right),middleHeld=ImGui.IsMouseDown(ImGuiMouseButton.Middle);
+        if(io.MouseWheel!=0&&!leftHeld&&!rightHeld&&!middleHeld&&!io.KeyAlt&&!io.KeySuper&&!(io.KeyCtrl&&io.KeyShift))
+        {
+            var at=ImPlot.PixelsToPlot(mouse);double factor=Math.Pow(1.15,-io.MouseWheel);
+            if(!io.KeyCtrl){double span=Math.Clamp((view.XMax-view.XMin)*factor,2,1e6),ratio=(at.X-view.XMin)/(view.XMax-view.XMin);view.XMin=at.X-ratio*span;view.XMax=view.XMin+span;}
+            if(!io.KeyShift){double span=Math.Clamp((view.YMax-view.YMin)*factor,1,1e5),ratio=(at.Y-view.YMin)/(view.YMax-view.YMin);view.YMin=at.Y-ratio*span;view.YMax=view.YMin+span;}
+            return;
+        }
+        if(plain&&rightHeld&&!leftHeld&&!middleHeld&&ImGui.IsMouseClicked(ImGuiMouseButton.Right)){rightView=view;contextMouseDownPosition=mouse;return;}
+        bool left=leftHeld&&!rightHeld&&!middleHeld&&ImGui.IsMouseClicked(ImGuiMouseButton.Left);
+        bool extend=shift&&rightHeld&&!leftHeld&&!middleHeld&&ImGui.IsMouseClicked(ImGuiMouseButton.Right);
+        bool moveRange=alt&&rightHeld&&!leftHeld&&!middleHeld&&ImGui.IsMouseClicked(ImGuiMouseButton.Right);
+        if(!left&&!extend&&!moveRange&&!context)return;
+        keyboardView=view;
+        var pick=PickTimeline(lanes,mouse);
+        VisibleLane? lane=pick?.Lane??LaneUnderMouse(lanes,mouse);
+        if(context)
+        {
+            if(lane.HasValue)
+            {
+                contextClip=lane.Value.Clip;contextTrack=lane.Value.Track;contextProperty=lane.Value.Property;contextKey=pick?.Key;
+                contextFrame=FrameStep(ImPlot.PixelsToPlot(mouse).X);newKeyValue=contextKey?.Value??0;ImGui.OpenPopup("TimelineContext");
+            }
+            return;
+        }
+        if(alt&&left)
+        {
+            currentFrame=Math.Clamp(FrameStep(ImPlot.PixelsToPlot(mouse).X),sequenceStart,sequenceEnd);
+            activeDrag=Gesture(EditMode.Playhead,view);return;
+        }
+        if(plain&&left)
+        {
+            if(ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && lane?.Property is not null
+                && pick?.Key is null && ImPlot.PixelsToPlot(mouse).Y < lane.Value.Y-.02)
+            {
+                // Mirrors the native scalar property's Keys list: create a key, not a nested track.
+                SelectLane(lane.Value,null);AddKey(lane.Value.Property,FrameStep(ImPlot.PixelsToPlot(mouse).X),0);return;
+            }
+            // Selection is deferred until release. Dragging over any item only pans.
+            activeDrag=Gesture(EditMode.Pan,view,lane??default,pick?.Key);
+            return;
+        }
+        if(!lane.HasValue)return;
+        if(extend){BeginRangeExtension(view,lane.Value,pick?.Key,pick?.Mode??EditMode.None);return;}
+        if(moveRange)
+        {
+            SelectLane(lane.Value,pick?.Key);
+            var property=lane.Value.Property;
+            if(lane.Value.Track is not null && (property is null || property.StartFrame.HasValue&&property.EndFrame.HasValue&&!(property.StartFrame==-1&&property.EndFrame==-1)))
+                activeDrag=Gesture(property is null?EditMode.TrackMove:EditMode.PropertyMove,view,lane.Value,pick?.Key,ImGuiMouseButton.Right);
+            return;
+        }
+        if(shift&&left && lane.Value.Track is not null)
+        {
+            // Reorder rows within their existing owner. No time or key value changes.
+            activeDrag=Gesture(lane.Value.Property is null?EditMode.ReorderTrack:EditMode.ReorderProperty,view,lane.Value,pick?.Key);
+        }
     }
 }
