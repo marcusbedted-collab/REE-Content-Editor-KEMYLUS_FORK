@@ -139,12 +139,12 @@ public partial class MotlistTimelineEditor
         DrawRangeBox(lane.StartFrame, lane.EndFrame, lane, new Vector4(0.28f, 0.72f, 0.78f, 1),
             $"{lane.Track!.Name.Split('.').Last()}  |  {lane.StartFrame:0.##} - {lane.EndFrame:0.##}", selected:ReferenceEquals(lane.Track,selectedTrack));
 
-        foreach (var group in lane.Track!.Properties.SelectMany(p=>p.Keys).GroupBy(k=>k.Frame).OrderBy(g=>g.Key))
+        foreach (var group in lane.Track!.AllProperties.SelectMany(p=>p.Keys).GroupBy(k=>k.Frame).OrderBy(g=>g.Key))
         {
             Vector2 marker=ImPlot.PlotToPixels(group.Key,KeyLaneY(lane));
             uint color=ImGui.GetColorU32(new Vector4(.5f,.82f,.94f,1));
             drawList.AddCircleFilled(marker,3,color,8);
-            string values=string.Join(", ",group.Select(k=>k.Value?.ToString("0.##")??"?").Distinct().Take(3));
+            string values=string.Join(", ",group.Select(k=>k.DisplayValue).Distinct().Take(3));
             DrawKeyCaption(marker,$"{values}  @{group.Key:0.##}",color);
         }
     }
@@ -154,20 +154,21 @@ public partial class MotlistTimelineEditor
         if(lane.Track is null)return $"MOTCLIP  {lane.Clip.Name}\n{lane.StartFrame:0.##} - {lane.EndFrame:0.##} frames";
         if(lane.Property is null)return $"TRACK  {lane.Track.Name.Split('.').Last()}\n{lane.StartFrame:0.##} - {lane.EndFrame:0.##}  |  {lane.Track.Properties.Count} properties";
         var p=lane.Property;string range=p.StartFrame.HasValue&&p.EndFrame.HasValue?$"{p.StartFrame:0.##} - {p.EndFrame:0.##}":"No active range";
-        return $"PROPERTY  {p.Name}\n{range}  |  {p.Keys.Count} keys";
+        return $"{(p.Container?"GROUP":"PROPERTY")}  {new string(' ',PropertyDepth(p)*2)}{p.Name}\n{(p.Disabled?"Inactive":range)}  |  {p.Keys.Count} keys";
     }
 
+    private static int PropertyDepth(TimelineProperty p) => p.Parent is null?0:1+PropertyDepth(p.Parent);
     private double KeyLaneY(VisibleLane lane)=>lane.Y-.29;
     private Vector2 KeyPosition(VisibleLane lane,TimelineKey key)=>ImPlot.PlotToPixels(key.Frame,KeyLaneY(lane));
     private void DrawPropertyKey(VisibleLane lane,TimelineKey key)
     {
         Vector2 point=KeyPosition(lane,key);var plot=ImPlot.GetPlotPos();var size=ImPlot.GetPlotSize();
         if(point.X<plot.X-8||point.X>plot.X+size.X+8||point.Y<plot.Y||point.Y>plot.Y+size.Y)return;
-        bool selected=ReferenceEquals(key,selectedKey);bool terminal=lane.Property!.EndsOnMinusOne&&key.Value==-1;
+        bool selected=ReferenceEquals(key,selectedKey);bool terminal=lane.Property!.IsTerminal(key);
         uint color=ImGui.GetColorU32(terminal?new Vector4(1,.48f,.4f,1):selected?new Vector4(1,1,.7f,1):new Vector4(1,.78f,.3f,1));
         float radius=selected?6:4.5f;var draw=ImPlot.GetPlotDrawList();
         draw.AddQuadFilled(point+new Vector2(0,-radius),point+new Vector2(radius,0),point+new Vector2(0,radius),point+new Vector2(-radius,0),color);
-        DrawKeyCaption(point,$"{key.Value?.ToString("0.##")??"?"}  @{key.Frame:0.##}",color);
+        DrawKeyCaption(point,$"{key.DisplayValue}  @{key.Frame:0.##}",color);
     }
     private void DrawKeyCaption(Vector2 point,string caption,uint color)
     {
@@ -220,7 +221,7 @@ public partial class MotlistTimelineEditor
         double? activeStart = null;
         foreach (TimelineKey key in property.Keys.OrderBy(key => key.Frame))
         {
-            if (key.Value == -1)
+            if (property.IsTerminal(key))
             {
                 if (activeStart.HasValue && key.Frame > activeStart.Value)
                 {

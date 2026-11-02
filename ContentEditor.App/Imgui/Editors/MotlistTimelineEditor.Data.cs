@@ -168,7 +168,7 @@ public partial class MotlistTimelineEditor
         view.Parent=parent;view.Children.Clear();view.Keys.Clear();
         foreach(var key in native.Keys??Enumerable.Empty<KeyBase>())view.Keys.Add(WrapKey(key,false));
         foreach(var key in native.ExtraKeys??Enumerable.Empty<KeyBase>())view.Keys.Add(WrapKey(key,true));
-        foreach(var child in native.ChildProperties??Enumerable.Empty<Property>())view.Children.Add(BindProperty(child,owner,view,visited));
+        foreach(var child in native.ChildProperties??Enumerable.Empty<Property>())if(!visited.Contains(child))view.Children.Add(BindProperty(child,owner,view,visited));
         return view;
     }
     private TimelineKey WrapKey(KeyBase native,bool extra){if(!keyNodes.TryGetValue(native,out var key)){key=new(native,extra);keyNodes.Add(native,key);}key.Extra=extra;return key;}
@@ -177,6 +177,18 @@ public partial class MotlistTimelineEditor
     {
         foreach(var clip in motlist.Motclips)
         {
+            var oldTracks=clip.Native.ClipEntry.Tracks.ToArray();
+            var oldData=clip.Native.TrackData.ToArray();
+            var dataByTrack=new Dictionary<ClipTrack,TracksData>();
+            for(int i=1;i<oldTracks.Length && i-1<oldData.Length;i++)dataByTrack[oldTracks[i]]=oldData[i-1];
+            // Keep per-track metadata with its track when a row is reordered or cloned.
+            if(clip.Native.ClipEntry.Version>ClipVersion.RE7)
+            {
+                var data=clip.Tracks.Select(t=>dataByTrack.TryGetValue(t.Native,out var existing)?existing:
+                    addedTrackData.TryGetValue(t.Native,out var added)?added:new TracksData{Version=clip.Native.ClipEntry.Version}).ToList();
+                data.AddRange(oldData.Skip(Math.Max(0,oldTracks.Length-1)));
+                Replace(clip.Native.TrackData,data);
+            }
             foreach(var track in clip.Tracks)
             {
                 Replace(track.Native.Properties,track.Properties.Select(p=>p.Native));

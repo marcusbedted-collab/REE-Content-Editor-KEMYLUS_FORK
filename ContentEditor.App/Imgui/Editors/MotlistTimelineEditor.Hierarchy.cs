@@ -188,7 +188,7 @@ public partial class MotlistTimelineEditor
             new Vector4(0.62f, 0.69f, 0.96f, 1f), ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanAvailWidth);
         if (ImGui.IsItemClicked() && !ImGui.IsItemToggledOpen())
         {
-            var owner = motlist.Motclips.SelectMany(c => c.Tracks.Select(t => (Clip:c, Track:t))).First(x => x.Track.Properties.Contains(property));
+            var owner = (Clip:property.Owner.Owner,Track:property.Owner);
             SelectTrack(owner.Clip, owner.Track); selectedProperty = property; selectedKey = null;
         }
         TooltipHelper.Tooltip($"Property {property.Name}; {property.Keys.Count} keys. Right-click its timeline row to add or paste a key.");
@@ -203,6 +203,10 @@ public partial class MotlistTimelineEditor
             ImGui.TextDisabled(property.StartFrame.HasValue && property.EndFrame.HasValue ? $"[{property.StartFrame:0.##} - {property.EndFrame:0.##}]" : property.ValueRange);
         }
 
+        foreach(var child in property.Children)
+        {
+            ImGui.PushID(child.UiId);DrawProperty(child);ImGui.PopID();
+        }
         ImGui.SetNextItemOpen(false, ImGuiCond.Once);
         if (TimelineTreeNode($"Keys ({property.Keys.Count})###keys", "K",
             new Vector4(0.95f, 0.76f, 0.32f, 1f), ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanAvailWidth))
@@ -210,7 +214,7 @@ public partial class MotlistTimelineEditor
             for (int keyIndex = 0; keyIndex < property.Keys.Count; keyIndex++)
             {
                 TimelineKey key = property.Keys[keyIndex];
-                string value = key.Value.HasValue ? key.Value.Value.ToString("0.##") : "value unavailable";
+                string value = key.DisplayValue;
                 ImGui.Text($"{keyIndex} [{key.Name}, Frame {key.Frame:0.##}]: {value}");
             }
 
