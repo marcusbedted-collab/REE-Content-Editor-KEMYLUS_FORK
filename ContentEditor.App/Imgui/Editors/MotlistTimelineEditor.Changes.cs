@@ -32,6 +32,7 @@ public partial class MotlistTimelineEditor
             void Property(Property p)
             {
                 if(!properties.Add(p))return;
+                Field(p.Info.FunctionName,v=>p.Info.FunctionName=v);
                 Field(p.Info.startFrame,v=>p.Info.startFrame=v);Field(p.Info.endFrame,v=>p.Info.endFrame=v);
                 PropertyList(p.ChildProperties,v=>p.ChildProperties=v);PropertyList(p.Keys,v=>p.Keys=v);PropertyList(p.ExtraKeys,v=>p.ExtraKeys=v);
                 foreach(var k in (p.Keys??Enumerable.Empty<KeyBase>()).Concat(p.ExtraKeys??Enumerable.Empty<KeyBase>())) Key(k);
@@ -40,6 +41,7 @@ public partial class MotlistTimelineEditor
             void Track(ClipTrack t)
             {
                 if(!tracks.Add(t))return;
+                Field(t.Name,v=>t.Name=v);
                 Field(t.startFrame,v=>t.startFrame=v);Field(t.endFrame,v=>t.endFrame=v);
                 List(t.Properties);List(t.ChildTracks);
                 foreach(var p in t.Properties) Property(p);

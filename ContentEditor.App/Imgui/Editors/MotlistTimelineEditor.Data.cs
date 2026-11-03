@@ -51,7 +51,6 @@ public partial class MotlistTimelineEditor
         public double? StartFrame {get=>Native.Info.startFrame;set {if(value.HasValue&&double.IsFinite(value.Value))Native.Info.startFrame=(float)value.Value;}}
         public double? EndFrame {get=>Native.Info.endFrame;set {if(value.HasValue&&double.IsFinite(value.Value))Native.Info.endFrame=(float)value.Value;}}
         public bool Disabled => StartFrame==-1&&EndFrame==-1;
-        public bool EndsOnMinusOne => CanCreateTerminal;
         public bool CanCreateTerminal => Native.Info.DataType==PropertyType.Bool ||
             Native.Info.DataType is PropertyType.S8 or PropertyType.S16 or PropertyType.S32 or PropertyType.S64
             && (Owner.Native.Name.Contains("ColliderReq",StringComparison.OrdinalIgnoreCase)||Owner.Native.Name.Contains("ReqSet",StringComparison.OrdinalIgnoreCase))
@@ -79,6 +78,7 @@ public partial class MotlistTimelineEditor
         public string Details=>Native.Version.ToString();
         public List<TimelineProperty> Properties {get;}=new();
         public IEnumerable<TimelineProperty> AllProperties=>Properties.SelectMany(p=>p.Descendants());
+        public bool HasStoredBounds=>Native.Version<ClipVersion.RE8;
         private (double Start,double End) Bounds
         {
             get
@@ -96,7 +96,7 @@ public partial class MotlistTimelineEditor
     internal sealed class Motclip
     {
         internal readonly MotClip Native;
-        internal readonly ClipTrack? Root;
+        internal ClipTrack? Root=>Native.ClipEntry.Tracks.FirstOrDefault();
         internal readonly MotFile Motion;
         public string Name=>string.IsNullOrWhiteSpace(Native.MainTrackName)?"Behavior clip":Native.MainTrackName;
         public double StartFrame=>Root is { Version:<ClipVersion.RE8 } && float.IsFinite(Root.startFrame)?Root.startFrame:Motion.Header.startFrame;
@@ -105,7 +105,6 @@ public partial class MotlistTimelineEditor
         internal Motclip(MotClip native,MotFile motion)
         {
             Native=native;Motion=motion;
-            Root=native.ClipEntry.Tracks.FirstOrDefault(t=>t.Name.Equals("Root",StringComparison.OrdinalIgnoreCase));
         }
     }
     private sealed class Motlist
@@ -122,16 +121,15 @@ public partial class MotlistTimelineEditor
 
     internal static KeyBase CreateNativeKey(Property property)
     {
-        var exemplar=property.Keys?.FirstOrDefault()??property.ExtraKeys?.FirstOrDefault();
-        KeyBase key=exemplar switch {
-            NormalKey=>new NormalKey(property.Info.Version){interpolation=InterpolationType.Linear},
-            BoolKey=>new BoolKey(property.Info.Version),
-            ActionKey=>new ActionKey(property.Info.Version),
-            NoHermiteKey=>new NoHermiteKey(property.Info.Version),
-            _=>property.Info.KeyType switch {
-                1=>new BoolKey(property.Info.Version),2=>new ActionKey(property.Info.Version),3=>new NoHermiteKey(property.Info.Version),
-                _=>property.Info.DataType==PropertyType.Bool?new BoolKey(property.Info.Version):new NormalKey(property.Info.Version){interpolation=InterpolationType.Linear}
-            }
+        // PropertyInfo.GetKeyList in REE-Lib reads every pre-MHWilds property
+        // from NormalKeys, including DMC5 bools. Payload type does not choose storage type.
+        int keyType=property.Info.Version<ClipVersion.MHWilds?0:property.Info.KeyType;
+        KeyBase key=keyType switch {
+            1=>new BoolKey(property.Info.Version),
+            2=>new ActionKey(property.Info.Version),
+            3=>new NoHermiteKey(property.Info.Version),
+            0=>new NormalKey(property.Info.Version){interpolation=InterpolationType.Linear},
+            _=>throw new NotSupportedException("Unsupported key storage type "+keyType)
         };
         key.PropertyType=property.Info.DataType;key.ResetValue();return key;
     }
@@ -142,21 +140,17 @@ public partial class MotlistTimelineEditor
         foreach(var native in clips.Distinct())
         {
             if(!clipViews.TryGetValue(native,out var clip)){clip=new(native,motion);clipViews.Add(native,clip);}
-            clip.Tracks.Clear();var visited=new HashSet<ClipTrack>();
-            void Add(ClipTrack track,ClipTrack? parent)
+            clip.Tracks.Clear();
+            // EmbeddedClip.Write and MotClip.TrackData use this exact flat order.
+            // TML's recursively nested TimelineChildTracks are a different format.
+            foreach(var track in native.ClipEntry.Tracks)
             {
-                if(!visited.Add(track))return;
-                if(!ReferenceEquals(track,clip.Root))
-                {
-                    if(!trackViews.TryGetValue(track,out var view)){view=new(track,clip,parent,++nextTimelineId);trackViews.Add(track,view);}
-                    view.ParentNative=parent;view.Properties.Clear();
-                    foreach(var property in track.Properties) view.Properties.Add(BindProperty(property,view,null,new()));
-                    clip.Tracks.Add(view);
-                }
-                foreach(var child in track.ChildTracks)Add(child,track);
+                if(ReferenceEquals(track,clip.Root))continue;
+                if(!trackViews.TryGetValue(track,out var view)){view=new(track,clip,clip.Root,++nextTimelineId);trackViews.Add(track,view);}
+                view.ParentNative=clip.Root;view.Properties.Clear();
+                foreach(var property in track.Properties)view.Properties.Add(BindProperty(property,view,null,new()));
+                clip.Tracks.Add(view);
             }
-            foreach(var root in native.ClipEntry.Tracks.Where(t=>!native.ClipEntry.Tracks.Any(p=>p.ChildTracks.Contains(t))))Add(root,null);
-            foreach(var track in native.ClipEntry.Tracks)Add(track,null);
             motlist.Motclips.Add(clip);
         }
     }

@@ -1,235 +1,53 @@
-using System.Numerics;
-using System.Globalization;
-using Hexa.NET.ImGui;
-using Hexa.NET.ImPlot;
-using Hexa.NET.ImGui.Widgets;
-using ReeLib;
-using ReeLib.Clip;
-using ReeLib.Mot;
-using ReeLib.Common;
-using ContentEditor.App.Graphics;
-
 namespace ContentEditor.App.ImguiHandling;
 
 public partial class MotlistTimelineEditor
 {
+    // One row list drives tree and canvas. Keys never become child tracks.
     private List<VisibleLane> BuildTimelineLanes()
     {
-        List<VisibleLane> lanes = new();
-        if (!motlistExpanded || !motclipsExpanded)
+        var lanes = new List<VisibleLane>();
+        bool filtering = timelineFilter.Length > 0;
+        bool Match(string value) => value.Contains(timelineFilter, StringComparison.OrdinalIgnoreCase);
+        bool Active(TimelineProperty p) => showInactive || !p.Disabled || p.Keys.Count > 0 || p.Children.Any(Active);
+        bool Matches(TimelineProperty p) => Match(p.Name) || p.Children.Any(Matches);
+        foreach (var clip in motlist.Motclips)
         {
-            return lanes;
-        }
-
-        foreach (Motclip motclip in motlist.Motclips)
-        {
-            lanes.Add(new VisibleLane($"Motclip: {motclip.Name}", motclip.Name, 0, null, null, motclip, motclip.StartFrame, motclip.EndFrame));
-            if (collapsedMotclips.Contains(motclip) || collapsedTrackGroups.Contains(motclip))
+            if (isolateTrack && selectedTrack is not null && !ReferenceEquals(clip, selectedTrack.Owner)) continue;
+            var tracks = clip.Tracks.Where(t => (!isolateTrack || selectedTrack is null || ReferenceEquals(t, selectedTrack)) &&
+                (!filtering || Match(clip.Name) || Match(t.Name) || t.AllProperties.Any(Matches))).ToList();
+            if (filtering && tracks.Count == 0 && !Match(clip.Name)) continue;
+            lanes.Add(new(clip.Name, clip.Name, 0, null, null, clip, clip.StartFrame, clip.EndFrame));
+            if (!filtering && collapsedMotclips.Contains(clip)) continue;
+            foreach (var track in tracks)
             {
-                continue;
-            }
-
-            foreach (TimelineTrack track in motclip.Tracks)
-            {
-                lanes.Add(new VisibleLane(track.Name, $"{motclip.Name}/{track.Name}", 0, null, track, motclip, track.StartFrame, track.EndFrame));
-
+                lanes.Add(new(track.Name, clip.Name + "/" + track.Name, 0, null, track, clip, track.StartFrame, track.EndFrame, 1));
+                if (!filtering && !expandedTracks.Contains(track)) continue;
+                bool includeAll = !filtering || Match(clip.Name) || Match(track.Name);
+                void AddProperty(TimelineProperty property, int depth, bool parentMatches)
+                {
+                    if (!Active(property) || !parentMatches && !Matches(property)) return;
+                    lanes.Add(new(property.Name, clip.Name + "/" + track.Name + "/" + property.Name, 0, property, track, clip,
+                        property.StartFrame ?? track.StartFrame, property.EndFrame ?? track.EndFrame, depth));
+                    if (!filtering && collapsedProperties.Contains(property)) return;
+                    foreach (var child in property.Children) AddProperty(child, depth + 1, parentMatches || Match(property.Name));
+                }
+                foreach (var property in track.Properties) AddProperty(property, 2, includeAll);
             }
         }
-
-        for (int i = 0; i < lanes.Count; i++)
-        {
-            lanes[i] = lanes[i] with { Y = lanes.Count - i - 1 };
-        }
-
+        for (int i = 0; i < lanes.Count; i++) lanes[i] = lanes[i] with { Y = lanes.Count - i - 1 };
         return lanes;
     }
-
-    private void DrawHierarchy()
+    private bool LaneCanExpand(VisibleLane lane) => lane.Property is { } property ? property.Children.Count > 0
+        : lane.Track is { } track ? track.Properties.Count > 0 : lane.Clip.Tracks.Count > 0;
+    private bool LaneExpanded(VisibleLane lane) => lane.Property is { } property ? !collapsedProperties.Contains(property)
+        : lane.Track is { } track ? expandedTracks.Contains(track) : !collapsedMotclips.Contains(lane.Clip);
+    private void ToggleLane(VisibleLane lane)
     {
-        ImGui.SetNextItemOpen(motlistExpanded, ImGuiCond.Once);
-        motlistExpanded = TimelineTreeNode($"{motlist.Name} ({motlist.Motclips.Count})", "M",
-            new Vector4(0.35f, 0.75f, 1f, 1f), ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanAvailWidth);
-        if (motlistExpanded)
-        {
-            ImGui.SetNextItemOpen(motclipsExpanded, ImGuiCond.Once);
-            motclipsExpanded = TimelineTreeNode("Motclips", "C",
-                new Vector4(0.95f, 0.68f, 0.28f, 1f), ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanAvailWidth);
-            if (motclipsExpanded)
-            {
-                for(int index=0;index<motlist.Motclips.Count;index++)
-                {
-                    ImGui.PushID(index);DrawMotclip(motlist.Motclips[index]);ImGui.PopID();
-                }
-
-                ImGui.TreePop();
-            }
-
-            ImGui.TreePop();
-        }
-
+        CancelGesture();
+        if (lane.Property is { } property)
+        { if (!collapsedProperties.Remove(property)) collapsedProperties.Add(property); }
+        else if (lane.Track is { } track)
+        { if (!expandedTracks.Remove(track)) expandedTracks.Add(track); }
+        else if (!collapsedMotclips.Remove(lane.Clip)) collapsedMotclips.Add(lane.Clip);
     }
-
-    private void DrawMotclip(Motclip motclip)
-    {
-        bool motclipOpen = !collapsedMotclips.Contains(motclip);
-        ImGui.SetNextItemOpen(motclipOpen, ImGuiCond.Always);
-        motclipOpen = TimelineTreeNode(motclip.Name, "C",
-            new Vector4(0.95f, 0.68f, 0.28f, 1f), ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanAvailWidth);
-        if(ImGui.IsItemClicked(ImGuiMouseButton.Right)&&!HasModifiers())
-        {
-            contextClip=motclip;contextTrack=null;contextProperty=null;contextKey=null;ImGui.OpenPopup("TimelineContext");
-        }
-        DrawTimelineContextMenu();
-        if (motclipOpen)
-        {
-            collapsedMotclips.Remove(motclip);
-        }
-        else
-        {
-            collapsedMotclips.Add(motclip);
-        }
-
-        if (!motclipOpen)
-        {
-            return;
-        }
-
-        bool tracksOpen = !collapsedTrackGroups.Contains(motclip);
-        ImGui.SetNextItemOpen(tracksOpen, ImGuiCond.Always);
-        tracksOpen = TimelineTreeNode($"Tracks ({motclip.Tracks.Count})###tracks", "T",
-            new Vector4(0.45f, 0.78f, 0.58f, 1f), ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanAvailWidth);
-        if (tracksOpen)
-        {
-            collapsedTrackGroups.Remove(motclip);
-        }
-        else
-        {
-            collapsedTrackGroups.Add(motclip);
-        }
-
-        if (tracksOpen)
-        {
-            for (int index = 0; index < motclip.Tracks.Count; index++)
-            {
-                ImGui.PushID(motclip.Tracks[index].UiId);
-                DrawTrack(motclip, motclip.Tracks[index]);
-                ImGui.PopID();
-            }
-
-            ImGui.TreePop();
-        }
-
-        ImGui.TreePop();
-    }
-
-    private void DrawTrack(Motclip motclip, TimelineTrack track)
-    {
-        ImGui.SetNextItemOpen(!collapsedTracks.Contains(track), ImGuiCond.Always);
-        bool trackOpen = TimelineTreeNode($"{track.Name}  [{track.StartFrame:0.##} - {track.EndFrame:0.##}]###track", "T",
-            new Vector4(0.45f, 0.78f, 0.58f, 1f), ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanAvailWidth);
-        if(ImGui.IsItemClicked(ImGuiMouseButton.Right)&&!HasModifiers())
-        {
-            contextClip=motclip;contextTrack=track;contextProperty=null;contextKey=null;ImGui.OpenPopup("TimelineContext");
-        }
-        DrawTimelineContextMenu();
-        if (ImGui.IsItemClicked() && !ImGui.IsItemToggledOpen()) SelectTrack(motclip, track);
-        if (trackOpen)
-        {
-            collapsedTracks.Remove(track);
-        }
-        else
-        {
-            collapsedTracks.Add(track);
-        }
-
-        if (!trackOpen)
-        {
-            return;
-        }
-
-        if (!string.IsNullOrEmpty(track.Details))
-        {
-            ImGui.TextDisabled(track.Details);
-        }
-
-        bool propertiesOpen = !collapsedPropertyGroups.Contains(track);
-        ImGui.SetNextItemOpen(propertiesOpen, ImGuiCond.Once);
-        propertiesOpen = TimelineTreeNode($"Properties ({track.Properties.Count})###properties", "P",
-            new Vector4(0.62f, 0.69f, 0.96f, 1f), ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanAvailWidth);
-        if (propertiesOpen)
-        {
-            collapsedPropertyGroups.Remove(track);
-        }
-        else
-        {
-            collapsedPropertyGroups.Add(track);
-        }
-
-        if (propertiesOpen)
-        {
-            for (int i = 0; i < track.Properties.Count; i++)
-            {
-                TimelineProperty property = track.Properties[i];
-                ImGui.PushID(property.UiId);
-                DrawProperty(property);
-                ImGui.PopID();
-            }
-
-            ImGui.TreePop();
-        }
-
-        ImGui.TreePop();
-    }
-
-    private void DrawProperty(TimelineProperty property)
-    {
-        ImGui.SetNextItemOpen(false, ImGuiCond.Once);
-        bool propertyOpen = TimelineTreeNode(property.Name, "P",
-            new Vector4(0.62f, 0.69f, 0.96f, 1f), ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanAvailWidth);
-        if (ImGui.IsItemClicked() && !ImGui.IsItemToggledOpen())
-        {
-            var owner = (Clip:property.Owner.Owner,Track:property.Owner);
-            SelectTrack(owner.Clip, owner.Track); selectedProperty = property; selectedKey = null;
-        }
-        TooltipHelper.Tooltip($"Property {property.Name}; {property.Keys.Count} keys. Right-click its timeline row to add or paste a key.");
-        if (!propertyOpen)
-        {
-            return;
-        }
-
-        if (!string.IsNullOrEmpty(property.ValueRange))
-        {
-            ImGui.SameLine();
-            ImGui.TextDisabled(property.StartFrame.HasValue && property.EndFrame.HasValue ? $"[{property.StartFrame:0.##} - {property.EndFrame:0.##}]" : property.ValueRange);
-        }
-
-        foreach(var child in property.Children)
-        {
-            ImGui.PushID(child.UiId);DrawProperty(child);ImGui.PopID();
-        }
-        ImGui.SetNextItemOpen(false, ImGuiCond.Once);
-        if (TimelineTreeNode($"Keys ({property.Keys.Count})###keys", "K",
-            new Vector4(0.95f, 0.76f, 0.32f, 1f), ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanAvailWidth))
-        {
-            for (int keyIndex = 0; keyIndex < property.Keys.Count; keyIndex++)
-            {
-                TimelineKey key = property.Keys[keyIndex];
-                string value = key.DisplayValue;
-                ImGui.Text($"{keyIndex} [{key.Name}, Frame {key.Frame:0.##}]: {value}");
-            }
-
-            ImGui.TreePop();
-        }
-
-        ImGui.TreePop();
-    }
-
-    private bool TimelineTreeNode(string label, string icon, Vector4 color, ImGuiTreeNodeFlags flags)
-    {
-        ImGui.PushStyleColor(ImGuiCol.Text, color);
-        bool open = ImGui.TreeNodeEx($"{icon}  {label}", flags);
-        ImGui.PopStyleColor();
-        return open;
-    }
-
 }

@@ -1,151 +1,94 @@
 using System.Numerics;
-using System.Globalization;
 using Hexa.NET.ImGui;
-using Hexa.NET.ImPlot;
-using Hexa.NET.ImGui.Widgets;
 using ReeLib;
 using ReeLib.Clip;
 using ReeLib.Mot;
-using ReeLib.Common;
 using ContentEditor.App.Graphics;
 
 namespace ContentEditor.App.ImguiHandling;
 
 public partial class MotlistTimelineEditor
 {
-    private readonly record struct VisibleLane(string Label, string Path, double Y, TimelineProperty? Property, TimelineTrack? Track, Motclip Clip, double StartFrame, double EndFrame);
+    private readonly record struct VisibleLane(string Label, string Path, double Y, TimelineProperty? Property,
+        TimelineTrack? Track, Motclip Clip, double StartFrame, double EndFrame, int Depth = 0);
     private readonly record struct TimelineSpan(double StartFrame, double EndFrame);
-
-    private enum EditMode
-    {
-        None,
-        Pan,
-        Playhead,
-        TrackStart,
-        TrackEnd,
-        TrackMove,
-        PropertyStart,
-        PropertyEnd,
-        PropertyMove,
-        CreatePropertyRange,
-        PropertyEndpoint,
-        ReorderTrack,
-        ReorderProperty,
-        Key
-    }
-
+    private enum EditMode { None, Pan, Playhead, TrackStart, TrackEnd, TrackMove, PropertyStart, PropertyEnd,
+        PropertyMove, CreatePropertyRange, PropertyEndpoint, KeySpanMove, ReorderTrack, ReorderProperty, Key }
     private sealed class TimelineDrag
     {
-        public EditMode Mode { get; init; }
-        public VisibleLane Lane { get; init; }
-        public TimelineTrack? Track { get; init; }
-        public TimelineProperty? Property { get; init; }
-        public TimelineKey? Key { get; init; }
-        public double InitialStart { get; init; }
-        public double InitialEnd { get; init; }
-        public double InitialFrame { get; init; }
-        public double OwnerStart { get; init; }
-        public double OwnerEnd { get; init; }
-        public float StartMouseX { get; init; }
-        public float StartMouseY { get; init; }
-        public float StartPlotWidth { get; init; }
-        public float StartPlotHeight { get; init; }
-        public double InitialXMin { get; init; }
-        public double InitialXMax { get; init; }
-        public double InitialYMin { get; init; }
-        public double InitialYMax { get; init; }
-        public TimelineView View { get; init; } = null!;
-        public ImGuiMouseButton Button { get; init; }
-        public bool Started { get; set; }
-        public TimelineKey? EndKey { get; set; }
-        public List<TimelineTrack>? TrackOrder { get; init; }
-        public List<TimelineProperty>? PropertyOrder { get; init; }
-        public List<TimelineKey> CreatedKeys { get; } = new();
-        public List<(TimelineKey Key, double Frame)> Keys { get; init; } = new();
-        public List<PropertyDragSnapshot> Properties { get; init; } = new();
+        public EditMode Mode;
+        public VisibleLane Lane;
+        public TimelineTrack? Track;
+        public TimelineProperty? Property;
+        public TimelineKey? Key, EndKey;
+        public double InitialStart, InitialEnd, InitialFrame, OwnerStart, OwnerEnd;
+        public float StartMouseX, StartMouseY, StartPlotWidth, StartPlotHeight, InitialRowHeight;
+        public double InitialXMin, InitialXMax, InitialYMin, InitialYMax;
+        public TimelineView View = null!;
+        public ImGuiMouseButton Button;
+        public bool Started, BoundaryKey;
+        public List<TimelineTrack>? TrackOrder;
+        public List<TimelineProperty>? PropertyOrder;
+        public List<TimelineKey> CreatedKeys = new();
+        public List<(TimelineKey Key, double Frame)> Keys = new();
+        public List<PropertyDragSnapshot> Properties = new();
     }
-
     private sealed record PropertyDragSnapshot(TimelineProperty Property, double? Start, double? End, List<(TimelineKey Key, double Frame)> Keys);
-
-    private double currentFrame = 24;
-    private bool snappingEnabled = true;
-    private bool motlistExpanded = true;
-    private bool motclipsExpanded = true;
+    private double currentFrame;
+    private bool snappingEnabled = true, showHierarchy = true, showInactive = true, isolateTrack, showCurves = true;
     private readonly HashSet<Motclip> collapsedMotclips = new();
-    private readonly HashSet<Motclip> collapsedTrackGroups = new();
-    private readonly HashSet<TimelineTrack> collapsedTracks = new();
-    private readonly HashSet<TimelineTrack> collapsedPropertyGroups = new();
+    private readonly HashSet<TimelineTrack> expandedTracks = new();
+    private readonly HashSet<TimelineProperty> collapsedProperties = new();
     private TimelineDrag? activeDrag;
-    private TimelineTrack? selectedTrack;
-    private Motclip? selectedClip;
-    private TimelineProperty? selectedProperty;
-    private TimelineKey? selectedKey;
-    private TimelineProperty? contextProperty;
-    private TimelineTrack? contextTrack;
-    private TimelineKey? contextKey;
-    private Motclip? contextClip;
-    private TimelineTrack? copiedTrack;
+    private TimelineTrack? selectedTrack, contextTrack, copiedTrack;
+    private Motclip? selectedClip, contextClip;
+    private TimelineProperty? selectedProperty, contextProperty;
+    private TimelineKey? selectedKey, contextKey;
     private double contextFrame;
-    private double newKeyValue;
     private Vector2 contextMouseDownPosition;
-    private const float MinimumHierarchyWidth = 220;
-    private const float MinimumTimelineWidth = 280;
-    private const float SplitterWidth = 6;
-    private bool showHierarchy = true;
-    private float hierarchyWidth = 330;
+    private float hierarchyWidth = 320, inspectorWidth = 300;
+    private string timelineFilter = "";
     private readonly Motlist motlist = new();
-
-
-
     private readonly MotlistEditor? editor;
     private readonly Action markModified;
     private readonly Action<Action, Action, string> recordChange;
     private MotFile? motion;
     private ReeLib.Motlist.MotIndex? motionIndex;
     private bool rebindPending, showNative, showDetails;
-    private Hexa.NET.ImPlot.ImPlotContextPtr plotContext;
 
     public MotlistTimelineEditor(MotlistEditor editor)
     {
-        this.editor = editor;
-        markModified = editor.MarkTimelineModified;
+        this.editor = editor; markModified = editor.MarkTimelineModified;
         recordChange = (apply, undo, id) => UndoRedo.RecordCallback(null, apply, undo, id);
     }
-
-    internal MotlistTimelineEditor(MotFile motion, IEnumerable<MotClip> clips, Action changed,
-        Action<Action, Action, string> record)
+    internal MotlistTimelineEditor(MotFile motion, IEnumerable<MotClip> clips, Action changed, Action<Action, Action, string> record)
     {
-        markModified = changed;
-        recordChange = record;
-        this.motion = motion;
-        BindMotion(motion, clips);
+        markModified = changed; recordChange = record; this.motion = motion;
+        currentFrame = motion.Header.startFrame; BindMotion(motion, clips);
     }
-
     public void Reset()
     {
-        CancelGesture();
-        motion = null; motionIndex = null; selectedClip = null; selectedTrack = null;
-        selectedProperty = null; selectedKey = null; rightView = null; keyboardView = null;
-        motlist.Motclips.Clear(); clipViews.Clear(); trackViews.Clear(); propertyNodes.Clear(); keyNodes.Clear();
-        collapsedMotclips.Clear(); collapsedTracks.Clear(); collapsedTrackGroups.Clear(); collapsedPropertyGroups.Clear();
-        propertyViews.Clear(); overviewView.Initialized = false; valueContexts.Clear();
+        CancelGesture(); motion = null; motionIndex = null;
+        selectedClip = contextClip = null; selectedTrack = contextTrack = copiedTrack = null;
+        selectedProperty = contextProperty = null; selectedKey = contextKey = null;
+        rightView = keyboardView = null; motlist.Motclips.Clear();
+        clipViews.Clear(); trackViews.Clear(); propertyNodes.Clear(); keyNodes.Clear(); addedTrackData.Clear();
+        collapsedMotclips.Clear(); expandedTracks.Clear(); collapsedProperties.Clear();
+        overviewView.Initialized = false; overviewView.RowCount = 0;
+        valueContexts.Clear(); numberDrafts.Clear();
+        creatingKeyFor = null; creatingPropertyFor = null; draftKey = extendingKey = null;
+        openKeyCreator = openPropertyCreator = false;
+        openRename=false;renamingTrack=null;renamingProperty=null;creatingPropertyParent=null;
     }
-
-    public void CloseTimelineWindow()
-    {
-        CancelGesture();
-        if (!plotContext.IsNull) { ImPlot.DestroyContext(plotContext); plotContext = default; }
-    }
+    public void CloseTimelineWindow() => CancelGesture();
     public void CloseInspectorWindow() { }
-
     private IEnumerable<MotClip> MotionClips() => (motion?.Clips ?? Enumerable.Empty<MotClip>())
         .Concat(motionIndex?.OverrideClips ?? Enumerable.Empty<MotClip>());
-
     public void Draw(Action drawNativeEditor)
     {
         if (editor is not null)
         {
-            ImGui.SetNextItemWidth(Math.Max(220, ImGui.GetContentRegionAvail().X - 145));
+            ImGui.SetNextItemWidth(Math.Max(180, ImGui.GetContentRegionAvail().X - 120));
             if (ImGui.BeginCombo("##TimelineMotion", motion is null ? "Choose motion" : $"{motionIndex?.motNumber.ToString() ?? "File"}  {motion.Name}"))
             {
                 foreach (var index in editor.File.Motions)
@@ -157,7 +100,7 @@ public partial class MotlistTimelineEditor
                 }
                 foreach (var file in editor.File.MotFiles.OfType<MotFile>().Where(f => !editor.File.Motions.Any(i => ReferenceEquals(i.MotFile, f))))
                 {
-                    ImGui.PushID(editor.File.MotFiles.IndexOf(file));
+                    ImGui.PushID(file.GetHashCode());
                     if (ImGui.Selectable($"Unindexed / {file.Name}", ReferenceEquals(file, motion))) ChooseMotion(file, null);
                     ImGui.PopID();
                 }
@@ -176,92 +119,91 @@ public partial class MotlistTimelineEditor
         if (motion is null) { ImGui.TextDisabled("This file contains no motion data."); return; }
         if (rebindPending && activeDrag is null)
         {
-            BindMotion(motion, MotionClips()); rebindPending = false;
-            if (selectedTrack is not null && !motlist.Motclips.Any(c => c.Tracks.Contains(selectedTrack))) { selectedTrack = null; selectedProperty = null; selectedKey = null; }
+            // Standalone previews have no editor/MotIndex; retain their supplied clips.
+            BindMotion(motion, editor is null ? motlist.Motclips.Select(c => c.Native).ToArray() : MotionClips());
+            rebindPending = false;
+            if (selectedClip is not null && !motlist.Motclips.Contains(selectedClip)) selectedClip = null;
+            if (selectedTrack is not null && !motlist.Motclips.Any(c => c.Tracks.Contains(selectedTrack))) selectedTrack = null;
+            if (selectedProperty is not null && (selectedTrack is null || !selectedTrack.AllProperties.Contains(selectedProperty))) selectedProperty = null;
             if (selectedKey is not null && selectedProperty?.Keys.Contains(selectedKey) != true) selectedKey = null;
         }
         DrawWorkspace();
     }
-
     private void ChooseMotion(MotFile file, ReeLib.Motlist.MotIndex? index)
     {
-        CancelGesture(); motion = file; motionIndex = index;
-        selectedClip = null; selectedTrack = null; selectedProperty = null; selectedKey = null;
-        BindMotion(file, MotionClips()); overviewView.Initialized = false; propertyViews.Clear();
+        Reset(); motion = file; motionIndex = index; BindMotion(file, MotionClips());
         currentFrame = file.Header.startFrame; rebindPending = false;
     }
-
     internal void DrawWorkspace()
     {
         if (motlist.Motclips.Count == 0) { ImGui.TextDisabled("This motion has no behavior clips."); return; }
-        if (plotContext.IsNull) { ImPlot.SetImGuiContext(ImGui.GetCurrentContext()); plotContext = ImPlot.CreateContext(); }
-        ImPlot.SetCurrentContext(plotContext);
-        ImGui.PushID("MotlistSimulation");
-        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 3f);
-        ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 3f);
-        // The simulation's colors are scoped to this workspace; other editor windows retain their theme.
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(.06f,.06f,.065f,1));
-        ImGui.PushStyleColor(ImGuiCol.FrameBg, new Vector4(.12f,.15f,.19f,1));
-        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(.13f,.23f,.36f,1));
-        ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(.14f,.27f,.39f,1));
+        ImGui.PushID("MotlistTimeline");
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5f); ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 5f);
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(10, 6));
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(.075f, .079f, .095f, 1));
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, new Vector4(.10f, .105f, .13f, 1));
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(.15f, .16f, .195f, 1));
+        ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(.22f, .32f, .49f, 1));
         var playback = Animator.LastPlaybackState;
         bool connected = playback is { } state && ReferenceEquals(state.ActiveMotion, motion);
         if (connected && activeDrag is null && playback!.Value.IsPlaying) currentFrame = playback.Value.CurrentFrame;
         double previousFrame = currentFrame;
-        ImGui.BeginDisabled(activeDrag is not null || rightView is not null);
-        DrawToolbar(connected ? playback : null);
-        ImGui.EndDisabled();
-        ImGui.Separator();
-        if (showHierarchy)
-        {
-            float availableWidth = ImGui.GetContentRegionAvail().X;
-            float minTimeline = Math.Min(MinimumTimelineWidth, availableWidth * .45f);
-            float minHierarchy = Math.Min(MinimumHierarchyWidth, Math.Max(0, availableWidth-minTimeline-SplitterWidth));
-            float maxHierarchy = Math.Max(minHierarchy,availableWidth-minTimeline-SplitterWidth);
-            hierarchyWidth = Math.Clamp(hierarchyWidth,minHierarchy,maxHierarchy);
-            float height = Math.Max(1,ImGui.GetContentRegionAvail().Y);
-            if (ImGui.BeginChild("MotlistHierarchy", new Vector2(hierarchyWidth,0), ImGuiChildFlags.Borders, ImGuiWindowFlags.HorizontalScrollbar)) DrawHierarchy();
-            ImGui.EndChild(); ImGui.SameLine(0,0);
-            ImGui.BeginDisabled(activeDrag is not null || rightView is not null);
-            ImGui.InvisibleButton("HierarchySplitter",new Vector2(SplitterWidth,height));
-            if (ImGui.IsItemActive()) hierarchyWidth = Math.Clamp(hierarchyWidth+ImGui.GetIO().MouseDelta.X,minHierarchy,maxHierarchy);
-            if (ImGui.IsItemHovered() || ImGui.IsItemActive()) ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeEw);
-            ImGui.EndDisabled(); ImGui.SameLine(0,0);
-        }
-        float detailsWidth = showDetails ? Math.Min(340,ImGui.GetContentRegionAvail().X*.35f) : 0;
-        if (ImGui.BeginChild("DopeSheet", new Vector2(showDetails ? -detailsWidth-8 : 0,0), ImGuiChildFlags.Borders, ImGuiWindowFlags.NoScrollbar|ImGuiWindowFlags.NoScrollWithMouse))
-        {
-            DrawDopeSheet(BuildTimelineLanes());
-        }
+        ImGui.BeginDisabled(activeDrag is not null || rightView is not null); DrawToolbar(connected ? playback : null); ImGui.EndDisabled();
+        float detailsWidth = showDetails ? Math.Clamp(inspectorWidth,Math.Min(220,ImGui.GetContentRegionAvail().X*.3f),Math.Max(220,ImGui.GetContentRegionAvail().X*.4f)) : 0;
+        float bodyHeight=ImGui.GetContentRegionAvail().Y;
+        if (ImGui.BeginChild("TimelineCanvasHost", new Vector2(showDetails ? -detailsWidth - 6 : 0, 0), ImGuiChildFlags.Borders,
+            ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)) DrawTimelineCanvas();
         ImGui.EndChild();
         if (showDetails)
         {
-            ImGui.SameLine();
-            if (ImGui.BeginChild("SelectionDetails",Vector2.Zero,ImGuiChildFlags.Borders)) DrawInspector();
+            ImGui.SameLine(0,0);ImGui.InvisibleButton("##InspectorWidth",new Vector2(6,bodyHeight));
+            if(ImGui.IsItemActive())inspectorWidth=Math.Clamp(detailsWidth-ImGui.GetIO().MouseDelta.X,220,600);
+            if(ImGui.IsItemActive()||ImGui.IsItemHovered())ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeEw);
+            ImGui.SameLine(0,0);
+            if (ImGui.BeginChild("SelectionDetails", Vector2.Zero, ImGuiChildFlags.Borders)) DrawInspector();
             ImGui.EndChild();
         }
+        DrawCreationPopups();
         if (connected && previousFrame != currentFrame && playback!.Value.FrameRate > 0)
-            playback.Value.Source.Seek((float)currentFrame/playback.Value.FrameRate);
-        ImGui.PopStyleColor(4); ImGui.PopStyleVar(2); ImGui.PopID();
+            playback.Value.Source.Seek((float)currentFrame / playback.Value.FrameRate);
+        ImGui.PopStyleColor(4); ImGui.PopStyleVar(3); ImGui.PopID();
     }
-
+    private static void ToolbarNext(float needed)
+    {
+        ImGui.SameLine(0,8);
+        if(ImGui.GetContentRegionAvail().X<needed)ImGui.NewLine();
+    }
     private void DrawToolbar(Animator.PlaybackState? playback)
     {
-        if (ImGui.Button(showHierarchy ? "Hide hierarchy" : "Show hierarchy")) showHierarchy = !showHierarchy;
-        ImGui.SameLine(); ImGui.Checkbox("Snap",ref snappingEnabled);
-        ImGui.SameLine(); ImGui.Text($"Frame: {currentFrame:0.##}");
-        ImGui.SameLine(); if (ImGui.Button("|<")) currentFrame = motlist.Motclips.Min(c=>c.StartFrame);
-        ImGui.SameLine(); if (ImGui.Button("<")) currentFrame = Math.Max(motlist.Motclips.Min(c=>c.StartFrame),currentFrame-1);
-        ImGui.SameLine(); if (ImGui.Button(">")) currentFrame = Math.Min(motlist.Motclips.Max(c=>c.EndFrame),currentFrame+1);
-        ImGui.SameLine(); if (ImGui.Button(">|")) currentFrame = motlist.Motclips.Max(c=>c.EndFrame);
-        ImGui.SameLine(); ImGui.BeginDisabled(playback is null);
-        if (ImGui.Button(playback?.IsPlaying == true ? "Pause" : "Play") && playback is { } state) { if (state.IsPlaying) state.Source.Pause(); else state.Source.Play(); }
+        bool selection=selectedProperty is not null||selectedTrack is not null;
+        ImGui.BeginDisabled(!selection);
+        if(ImGui.Button("Duplicate"))DuplicateSelection();
+        ToolbarNext(140);if(ImGui.Button("Delete selected"))DeleteSelection();
+        ToolbarNext(90);if(ImGui.Button("Rename"))RequestRename();
         ImGui.EndDisabled();
-        ImGui.SameLine(); ImGui.Checkbox("Details",ref showDetails);
-        ImGui.SameLine(); if (ImGui.Button("Bindings")) ImGui.OpenPopup("TimelineBindings");
-        if (ImGui.BeginPopup("TimelineBindings"))
+        ToolbarNext(70);ImGui.BeginDisabled(editor is null||!UndoRedo.CanUndo());if(ImGui.Button("Undo"))UndoRedo.Undo();ImGui.EndDisabled();
+        ToolbarNext(70);ImGui.BeginDisabled(editor is null||!UndoRedo.CanRedo());if(ImGui.Button("Redo"))UndoRedo.Redo();ImGui.EndDisabled();
+        ToolbarNext(90);ImGui.BeginDisabled(playback is null);
+        ImGui.PushStyleColor(ImGuiCol.Button,new Vector4(.27f,.44f,.80f,1));
+        if(ImGui.Button(playback?.IsPlaying==true?"Pause":"Play")&&playback is { } p)
+        {if(p.IsPlaying)p.Source.Pause();else p.Source.Play();}
+        ImGui.PopStyleColor();ImGui.EndDisabled();
+        ToolbarNext(190);ImGui.TextDisabled($"Frame {currentFrame:0.##} / {motlist.Motclips.Max(c=>c.EndFrame):0.##}");
+        ImGui.SetNextItemWidth(220);ImGui.InputTextWithHint("##TimelineFilter","Find track or property...",ref timelineFilter,256);
+        ToolbarNext(45);if(ImGui.Button("Fit"))overviewView.Initialized=false;
+        ToolbarNext(90);ImGui.Checkbox("Curves",ref showCurves);
+        ToolbarNext(80);ImGui.Checkbox("Snap",ref snappingEnabled);
+        ToolbarNext(100);ImGui.Checkbox("Inactive",ref showInactive);
+        ToolbarNext(110);ImGui.Checkbox("Inspector",ref showDetails);
+        ToolbarNext(75);if(ImGui.Button("Options"))ImGui.OpenPopup("TimelineOptions");
+        if(ImGui.BeginPopup("TimelineOptions"))
         {
-            ImGui.TextUnformatted("Left drag: pan X/Y; click: select\nShift+left drag: reorder within the same owner\nAlt+left click/drag: scrub\nAlt+right drag: move range and its keys\nShift+right drag: extend range / create typed end\nDouble-left below a property box: add a key\nRight click: context actions and copy/paste tracks\nWheel: zoom X/Y; Shift+wheel: X; Ctrl+wheel: Y\nEscape: cancel gesture\nLeft/Right: frame; Up/Down: previous/next key\nHome/End: bounds; K: add; Ctrl+C/V: copy/paste key; Delete: remove");
+            ImGui.Checkbox("Track names",ref showHierarchy);
+            ImGui.Checkbox("Isolate selected track",ref isolateTrack);
+            if(ImGui.MenuItem("Expand all tracks"))foreach(var track in motlist.Motclips.SelectMany(c=>c.Tracks))expandedTracks.Add(track);
+            if(ImGui.MenuItem("Collapse all tracks"))expandedTracks.Clear();
+            ImGui.Separator();
+            ImGui.TextUnformatted("Left drag: pan | Alt + left: scrub\nAlt + right: move key / range\nShift + right: extend end\nShift + left: reorder rows\nDouble-click a property: create key\nRight-click: context actions\nWheel: zoom | Shift: time only | Ctrl: row height\nEscape: cancel | Ctrl+C / Ctrl+V: copy / paste key\nCtrl+Z / Ctrl+Y: undo / redo");
             ImGui.EndPopup();
         }
     }
