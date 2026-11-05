@@ -6,7 +6,7 @@ using ReeLib;
 using ReeLib.Clip;
 using ReeLib.Mot;
 using ReeLib.Common;
-using ContentEditor.App.Graphics;
+
 
 namespace ContentEditor.App.ImguiHandling;
 
@@ -182,8 +182,8 @@ public partial class MotlistTimelineEditor
         var io=ImGui.GetIO();
         if(io.KeyAlt||io.KeyShift||io.KeySuper)return;
         bool control=io.KeyCtrl;
-        if(control&&ImGui.IsKeyPressed(ImGuiKey.Z)&&editor is not null){UndoRedo.Undo();return;}
-        if(control&&ImGui.IsKeyPressed(ImGuiKey.Y)&&editor is not null){UndoRedo.Redo();return;}
+        if(control&&ImGui.IsKeyPressed(ImGuiKey.Z)){UndoRedo.Undo();return;}
+        if(control&&ImGui.IsKeyPressed(ImGuiKey.Y)){UndoRedo.Redo();return;}
         if (control && ImGui.IsKeyPressed(ImGuiKey.C) && selectedKey is not null)
         {
             CopyKey(selectedKey);
@@ -232,3 +232,4 @@ public partial class MotlistTimelineEditor
 
 
 }
+

@@ -5,7 +5,7 @@ namespace ContentEditor.App.ImguiHandling;
 
 public partial class MotlistTimelineEditor
 {
-    private readonly Dictionary<(object Target,string Member),UIContext> valueContexts=new();
+    private readonly Dictionary<(object Target,string Member),string> memberDrafts=new();
     private sealed class NumberDraft
     {
         public double Value;
@@ -41,13 +41,32 @@ public partial class MotlistTimelineEditor
         var raw=get();
         if(raw is null){if(label)ImGui.TextDisabled(name+": (none)");return;}
         if(label)ImGui.TextDisabled(name);
-        if(!valueContexts.TryGetValue((target,name),out var context))
+        var id=(target,name);
+        ImGui.PushID(target.GetHashCode());
+        if(raw is bool flag)
         {
-            context=new UIContext("##"+name,target,null!,_=>get(),(_,v)=>{set(v);markModified();},UIOptions.None);
-            context.root=context;valueContexts.Add((target,name),context);
+            if(ImGui.Checkbox("##"+name,ref flag)) Edit(()=>set(flag));
         }
-        context.uiHandler=WindowHandlerFactory.CreateUIHandler(raw,raw.GetType());
-        ImGui.PushID(target.GetHashCode());ImGui.SetNextItemWidth(-1);context.ShowUI();ImGui.PopID();
+        else if(raw is string || raw.GetType().IsPrimitive || raw.GetType().IsEnum || raw is decimal)
+        {
+            if(!memberDrafts.TryGetValue(id,out var draft)) draft=Convert.ToString(raw,System.Globalization.CultureInfo.InvariantCulture)??"";
+            ImGui.SetNextItemWidth(-1);
+            ImGui.InputText("##"+name,ref draft,1024);
+            if(ImGui.IsItemDeactivatedAfterEdit())
+            {
+                try
+                {
+                    object parsed=raw.GetType().IsEnum?Enum.Parse(raw.GetType(),draft):Convert.ChangeType(draft,raw.GetType(),System.Globalization.CultureInfo.InvariantCulture);
+                    Edit(()=>set(parsed));
+                    memberDrafts.Remove(id);
+                }
+                catch(Exception e) when(e is FormatException or OverflowException or ArgumentException) { memberDrafts[id]=draft; }
+            }
+            else if(ImGui.IsItemActive()) memberDrafts[id]=draft;
+            else memberDrafts.Remove(id);
+        }
+        else ImGui.TextUnformatted(raw.ToString()??"");
+        ImGui.PopID();
     }
     private void Metadata(string label,object target)
     {
@@ -154,3 +173,4 @@ public partial class MotlistTimelineEditor
         }
     }
 }
+

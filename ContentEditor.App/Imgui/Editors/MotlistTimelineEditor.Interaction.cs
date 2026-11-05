@@ -28,7 +28,7 @@ public partial class MotlistTimelineEditor
     private readonly TimelineView overviewView = new("BehaviorCanvas");
     private TimelineView? keyboardView, rightView;
     private bool HasModifiers() { var io=ImGui.GetIO(); return io.KeyCtrl||io.KeyAlt||io.KeyShift||io.KeySuper; }
-    private double FrameStep(double value) => snappingEnabled ? Math.Round(value,MidpointRounding.AwayFromZero) : value;
+    private double FrameStep(double value) => snappingEnabled ? Math.Round(value / design.FrameSnapStep,MidpointRounding.AwayFromZero) * design.FrameSnapStep : value;
     private double SnapFrame(double value) => FrameStep(value);
     private void SelectTrack(Motclip clip, TimelineTrack track)
     {
@@ -92,7 +92,7 @@ public partial class MotlistTimelineEditor
         var mouse=ImGui.GetMousePos();
         if(!d.Started)
         {
-            if(Vector2.DistanceSquared(mouse,new(d.StartMouseX,d.StartMouseY))<25)return;
+            if(Vector2.DistanceSquared(mouse,new(d.StartMouseX,d.StartMouseY))<design.DragThreshold*design.DragThreshold)return;
             if(d.Mode is not EditMode.Pan and not EditMode.Playhead and not EditMode.None)BeginEdit();
             d.Started=true;
         }
@@ -202,13 +202,19 @@ public partial class MotlistTimelineEditor
             if(Math.Abs(mouse.Y-RowY(lane.Y))>overviewView.RowHeight/2)continue;
             if(lane.Property is { } p)
             {
-                var nearest=p.Keys.Where(k=>double.IsFinite(k.Frame)).OrderBy(k=>Vector2.DistanceSquared(mouse,KeyPosition(lane,k))).FirstOrDefault();
-                if(nearest is not null&&Vector2.DistanceSquared(mouse,KeyPosition(lane,nearest))<=100)return new(lane,nearest,EditMode.Key);
+                var limits=CurveLimits(p); TimelineKey? nearest=null; float nearestDistance=float.MaxValue;
+                foreach(var key in p.Keys)
+                {
+                    if(!double.IsFinite(key.Frame))continue;
+                    float distance=Vector2.DistanceSquared(mouse,KeyPosition(lane,key,limits));
+                    if(distance<nearestDistance){nearest=key;nearestDistance=distance;}
+                }
+                if(nearest is not null&&nearestDistance<=100)return new(lane,nearest,EditMode.Key);
                 foreach(var span in GetKeySegments(p))
                 {
-                    if(CurveLimits(p) is not null&&span.End is { } curveEnd)
+                    if(limits is not null&&span.End is { } curveEnd)
                     {
-                        var a=KeyPosition(lane,span.Start);var b=KeyPosition(lane,curveEnd);
+                        var a=KeyPosition(lane,span.Start,limits);var b=KeyPosition(lane,curveEnd,limits);
                         if(mouse.X<a.X||mouse.X>b.X)continue;
                         float ratio=(mouse.X-a.X)/Math.Max(1,b.X-a.X);
                         float lineY=((NormalKey)span.Start.Native).interpolation==InterpolationType.Discrete?a.Y:a.Y+(b.Y-a.Y)*ratio;
@@ -284,6 +290,8 @@ public partial class MotlistTimelineEditor
             keyboardView=view;return;
         }
         var lane=LaneUnderMouse(lanes,mouse);var pick=PickTimeline(lanes,mouse);
+        if(plain && ImGui.IsMouseClicked(ImGuiMouseButton.Middle))
+        { activeDrag=Gesture(EditMode.Pan,view,lane??default,button:ImGuiMouseButton.Middle); return; }
         if(!leftHeld&&!rightHeld&&pick is { Key: { } key } hit)
             ImGui.SetTooltip(hit.Lane.Property!.Name+"\n"+ValueText(hit.Lane.Property,key)+"\n"+TimeText(key.Frame,hit.EndFrame??key.Frame)+"\nAlt + right: move  |  Shift + right: extend end");
         bool left=ImGui.IsMouseClicked(ImGuiMouseButton.Left)&&!rightHeld, right=ImGui.IsMouseClicked(ImGuiMouseButton.Right)&&!leftHeld;
@@ -313,6 +321,14 @@ public partial class MotlistTimelineEditor
                     if(mouse.X>=view.PlotMin.X&&row.Property is { Container:false } p&&pick?.Key is null){RequestKeyCreation(p,FrameStep(MouseFrame(mouse)));return;}
                     if(pick?.Key is not null)showDetails=true;
                 }
+            }
+            if(design.DirectTimelineDrag && pick is { } direct && lane is { } directLane && directLane.Track is not null)
+            {
+                SelectLane(directLane,direct.Key);
+                activeDrag=Gesture(direct.Mode,view,directLane,direct.Key,ImGuiMouseButton.Left,
+                    direct.Key?.Frame??directLane.StartFrame,direct.EndFrame??direct.Key?.Frame??directLane.EndFrame,
+                    direct.EndKey??(direct.Key is not null&&directLane.Property is { } property?GetKeySegments(property).FirstOrDefault(s=>ReferenceEquals(s.Start,direct.Key)).End:null));
+                return;
             }
             activeDrag=Gesture(EditMode.Pan,view,lane??default,pick?.Key);return;
         }

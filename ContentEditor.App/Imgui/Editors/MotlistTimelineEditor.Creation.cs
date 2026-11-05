@@ -14,7 +14,8 @@ public partial class MotlistTimelineEditor
     private double draftFrame,draftEnd;
     private string draftValueText="",creationError="",draftPropertyName="";
     private PropertyType draftPropertyType=PropertyType.S32;
-    private static readonly PropertyType[] CreatableTypes=Enum.GetValues<PropertyType>();
+    private static readonly PropertyType[]CreatableTypes=Enum.
+GetValues<PropertyType>();
     private bool openRename;
     private TimelineTrack? renamingTrack;
     private TimelineProperty? renamingProperty;

@@ -1,0 +1,322 @@
+{
+  "Version": 1,
+  "GridSnap": true,
+  "GridSize": 12,
+  "ToolbarHeight": 112,
+  "RowHeight": 36,
+  "HierarchyWidth": 317,
+  "InspectorWidth": 300,
+  "Widgets": [
+    {
+      "Id": "74c36bbbb05e4bb9a21bf6ffed41527c",
+      "Binding": "duplicate",
+      "Label": "Duplicate",
+      "Kind": 0,
+      "X": 0,
+      "Y": 0,
+      "Width": 96,
+      "Height": 32,
+      "Visible": true,
+      "Text": "",
+      "Checked": false,
+      "Value": 0,
+      "Target": 0,
+      "CustomColor": false,
+      "Color": 4291594308,
+      "Graph": {
+        "Nodes": [],
+        "Links": []
+      }
+    },
+    {
+      "Id": "b3e83e83b33942f4b99359696f6817ba",
+      "Binding": "delete",
+      "Label": "Delete selected",
+      "Kind": 0,
+      "X": 104,
+      "Y": 0,
+      "Width": 136,
+      "Height": 32,
+      "Visible": true,
+      "Text": "",
+      "Checked": false,
+      "Value": 0,
+      "Target": 0,
+      "CustomColor": false,
+      "Color": 4291594308,
+      "Graph": {
+        "Nodes": [],
+        "Links": []
+      }
+    },
+    {
+      "Id": "b8d2ec30acff4993b172f0b4dca887fb",
+      "Binding": "rename",
+      "Label": "Rename",
+      "Kind": 0,
+      "X": 248,
+      "Y": 0,
+      "Width": 88,
+      "Height": 32,
+      "Visible": true,
+      "Text": "",
+      "Checked": false,
+      "Value": 0,
+      "Target": 0,
+      "CustomColor": false,
+      "Color": 4291594308,
+      "Graph": {
+        "Nodes": [],
+        "Links": []
+      }
+    },
+    {
+      "Id": "f607ff34d6b84f6abf4641b77ece7a66",
+      "Binding": "undo",
+      "Label": "Undo",
+      "Kind": 0,
+      "X": 344,
+      "Y": 0,
+      "Width": 64,
+      "Height": 32,
+      "Visible": true,
+      "Text": "",
+      "Checked": false,
+      "Value": 0,
+      "Target": 0,
+      "CustomColor": false,
+      "Color": 4291594308,
+      "Graph": {
+        "Nodes": [],
+        "Links": []
+      }
+    },
+    {
+      "Id": "bc0753319f1c45ec9b4bcf98dff71143",
+      "Binding": "redo",
+      "Label": "Redo",
+      "Kind": 0,
+      "X": 416,
+      "Y": 0,
+      "Width": 64,
+      "Height": 32,
+      "Visible": true,
+      "Text": "",
+      "Checked": false,
+      "Value": 0,
+      "Target": 0,
+      "CustomColor": false,
+      "Color": 4291594308,
+      "Graph": {
+        "Nodes": [],
+        "Links": []
+      }
+    },
+    {
+      "Id": "47155f79b02642a9ba7c2848d0c25067",
+      "Binding": "frame",
+      "Label": "Frame",
+      "Kind": 0,
+      "X": 400,
+      "Y": 80,
+      "Width": 160,
+      "Height": 32,
+      "Visible": true,
+      "Text": "",
+      "Checked": false,
+      "Value": 0,
+      "Target": 0,
+      "CustomColor": false,
+      "Color": 4291594308,
+      "Graph": {
+        "Nodes": [],
+        "Links": []
+      }
+    },
+    {
+      "Id": "ac512540d82f46ae975ebf09820976dd",
+      "Binding": "filter",
+      "Label": "Find track or property...",
+      "Kind": 0,
+      "X": 0,
+      "Y": 48,
+      "Width": 224,
+      "Height": 40,
+      "Visible": true,
+      "Text": "",
+      "Checked": false,
+      "Value": 0,
+      "Target": 0,
+      "CustomColor": false,
+      "Color": 4291594308,
+      "Graph": {
+        "Nodes": [],
+        "Links": []
+      }
+    },
+    {
+      "Id": "23bfec7048314b6b8ddb630a48e76d26",
+      "Binding": "fit",
+      "Label": "Fit",
+      "Kind": 0,
+      "X": 232,
+      "Y": 48,
+      "Width": 48,
+      "Height": 32,
+      "Visible": true,
+      "Text": "",
+      "Checked": false,
+      "Value": 0,
+      "Target": 0,
+      "CustomColor": false,
+      "Color": 4291594308,
+      "Graph": {
+        "Nodes": [],
+        "Links": []
+      }
+    },
+    {
+      "Id": "b8ebcae6c7184e3295800813e9a1ef3b",
+      "Binding": "curves",
+      "Label": "Curves",
+      "Kind": 0,
+      "X": 288,
+      "Y": 48,
+      "Width": 88,
+      "Height": 32,
+      "Visible": true,
+      "Text": "",
+      "Checked": false,
+      "Value": 0,
+      "Target": 0,
+      "CustomColor": false,
+      "Color": 4291594308,
+      "Graph": {
+        "Nodes": [],
+        "Links": []
+      }
+    },
+    {
+      "Id": "758e21e5f7e04e47b036c713b920b5e3",
+      "Binding": "snap",
+      "Label": "Snap",
+      "Kind": 0,
+      "X": 384,
+      "Y": 48,
+      "Width": 80,
+      "Height": 32,
+      "Visible": true,
+      "Text": "",
+      "Checked": false,
+      "Value": 0,
+      "Target": 0,
+      "CustomColor": false,
+      "Color": 4291594308,
+      "Graph": {
+        "Nodes": [],
+        "Links": []
+      }
+    },
+    {
+      "Id": "b84575b2c15f46d6bedc4913fc7bf667",
+      "Binding": "inactive",
+      "Label": "Inactive",
+      "Kind": 0,
+      "X": 472,
+      "Y": 48,
+      "Width": 96,
+      "Height": 32,
+      "Visible": true,
+      "Text": "",
+      "Checked": false,
+      "Value": 0,
+      "Target": 0,
+      "CustomColor": false,
+      "Color": 4291594308,
+      "Graph": {
+        "Nodes": [],
+        "Links": []
+      }
+    },
+    {
+      "Id": "7032510e8f1b4398a3978d4dd23fc1ab",
+      "Binding": "inspector",
+      "Label": "Inspector",
+      "Kind": 0,
+      "X": 800,
+      "Y": 48,
+      "Width": 104,
+      "Height": 32,
+      "Visible": true,
+      "Text": "",
+      "Checked": false,
+      "Value": 0,
+      "Target": 0,
+      "CustomColor": false,
+      "Color": 4291594308,
+      "Graph": {
+        "Nodes": [],
+        "Links": []
+      }
+    },
+    {
+      "Id": "6cd0f4a34bcb45df90fc222bf2f7d207",
+      "Binding": "options",
+      "Label": "Options",
+      "Kind": 0,
+      "X": 624,
+      "Y": 48,
+      "Width": 88,
+      "Height": 32,
+      "Visible": true,
+      "Text": "",
+      "Checked": false,
+      "Value": 0,
+      "Target": 0,
+      "CustomColor": true,
+      "Color": 4288778645,
+      "Graph": {
+        "Nodes": [
+          {
+            "Id": 1,
+            "Kind": 0,
+            "Trigger": 1,
+            "Number": 0,
+            "Boolean": false,
+            "Text": "",
+            "X": 48.29306,
+            "Y": 51.01413
+          },
+          {
+            "Id": 2,
+            "Kind": 1,
+            "Trigger": 0,
+            "Number": 0,
+            "Boolean": false,
+            "Text": "",
+            "X": 264.00003,
+            "Y": -213.00003
+          },
+          {
+            "Id": 3,
+            "Kind": 3,
+            "Trigger": 0,
+            "Number": 0,
+            "Boolean": false,
+            "Text": "",
+            "X": 487,
+            "Y": -107.00003
+          }
+        ],
+        "Links": []
+      }
+    }
+  ],
+  "DirectTimelineDrag": true,
+  "DragThreshold": 6,
+  "FrameSnapStep": 1,
+  "BarRounding": 4,
+  "KeySize": 5,
+  "LeftPanelWidth": 220,
+  "RightPanelWidth": 260
+}

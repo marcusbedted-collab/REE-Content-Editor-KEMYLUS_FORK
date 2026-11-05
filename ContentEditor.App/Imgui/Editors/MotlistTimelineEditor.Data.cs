@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using ReeLib;
 using ReeLib.Clip;
 using ReeLib.Common;
